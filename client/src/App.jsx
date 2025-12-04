@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Map from "./components/Map";
 import "./App.css";
 
 function App() {
@@ -55,10 +56,8 @@ function App() {
       </div>
 
       {/* Map Placeholder (Purple Square) */}
-      <div className="map-container">
-        <div className="map-placeholder">
-          <p>🗺️ Map will go here</p>
-        </div>
+      <div className="map-wrapper">
+        <Map dayOfYear={dayOfYear} />
       </div>
 
       {/* Date Display & Slider */}
