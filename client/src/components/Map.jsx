@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import * as turf from "@turf/turf";
 import "./Map.css";
 
 const Map = ({ dayOfYear }) => {
@@ -84,50 +85,6 @@ const Map = ({ dayOfYear }) => {
         layers[0]?.id
       );
 
-      // Add terrain/elevation data source
-      map.current.addSource("terrain", {
-        type: "raster-dem",
-        url: "https://demotiles.maplibre.org/terrain-tiles/tiles.json",
-        tileSize: 256,
-      });
-
-      // Set terrain exaggeration for 3D effect
-      map.current.setTerrain({
-        source: "terrain",
-        exaggeration: 1.5,
-      });
-
-      // Add hillshade for dramatic topography
-      map.current.addSource("hillshade", {
-        type: "raster",
-        tiles: ["https://tile.openstreetmap.fr/hillshading/{z}/{x}/{y}.png"],
-        tileSize: 256,
-      });
-
-      map.current.addLayer({
-        id: "hillshade",
-        type: "raster",
-        source: "hillshade",
-        paint: {
-          "raster-opacity": 0.5,
-          "raster-brightness-min": 0.3,
-          "raster-brightness-max": 1.0,
-        },
-      });
-
-      // Add contour lines for elevation
-      map.current.addLayer({
-        id: "terrain-hillshade",
-        type: "hillshade",
-        source: "terrain",
-        paint: {
-          "hillshade-exaggeration": 0.8,
-          "hillshade-shadow-color": "#473B24",
-          "hillshade-highlight-color": "#FFFFFF",
-          "hillshade-accent-color": "#A67B5B",
-        },
-      });
-
       // Add state borders using a simple GeoJSON
       // For now, we'll add a placeholder source that will be replaced with actual data
       map.current.addSource("state-borders", {
@@ -147,8 +104,7 @@ const Map = ({ dayOfYear }) => {
           "line-width": 0.7,
         },
       });
-
-      // Add foliage overlay (initially all dark brown = "none" stage)
+      // Add foliage grid overlay (3-mile squares)
       map.current.addSource("foliage", {
         type: "geojson",
         data: {
@@ -178,33 +134,14 @@ const Map = ({ dayOfYear }) => {
         },
       });
 
-      // Add major interstate highways for character
-      map.current.addSource("highways", {
-        type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: [],
-        },
-      });
-
+      // Add state borders on top of foliage (so they're visible)
       map.current.addLayer({
-        id: "highways-line",
+        id: "state-borders-top",
         type: "line",
-        source: "highways",
+        source: "state-borders",
         paint: {
-          "line-color": "#B6B6B6",
-          "line-width": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            3,
-            0.8,
-            6,
-            1.5,
-            9,
-            2.5,
-          ],
-          "line-opacity": 0.6,
+          "line-color": "#666666",
+          "line-width": 1.5,
         },
       });
 
@@ -216,17 +153,11 @@ const Map = ({ dayOfYear }) => {
         .then((data) => {
           map.current.getSource("state-borders").setData(data);
 
-          // Use the US states data to create the foliage overlay
-          // This ensures the foliage layer matches the actual US boundaries
-          const foliageData = createFoliageFromStates(data);
-          map.current.getSource("foliage").setData(foliageData);
+          // Create 3-mile grid squares with foliage data
+          const foliageGrid = createFoliageGrid(data);
+          map.current.getSource("foliage").setData(foliageGrid);
         })
         .catch((err) => console.log("Could not load state borders:", err));
-
-      // Load major interstate highways
-      createMajorHighways().then((highwayData) => {
-        map.current.getSource("highways").setData(highwayData);
-      });
     });
 
     return () => {
@@ -315,369 +246,65 @@ const Map = ({ dayOfYear }) => {
 };
 
 // Create foliage data from actual US state boundaries
-function createFoliageFromStates(statesGeoJSON) {
-  const features = statesGeoJSON.features
-    .filter((state) => {
-      const stateName = state.properties.name;
-      // Exclude Alaska and Hawaii
-      return stateName !== "Alaska" && stateName !== "Hawaii";
-    })
-    .map((state) => {
-      const stateName = state.properties.name;
+// Create larger grid squares for better performance
+function createFoliageGrid(statesGeoJSON) {
+  // Continental US bounds
+  const bbox = [-130, 24, -65, 50];
+  const cellSide = 5; // miles (increased from 3 for much better performance)
+  const options = { units: "miles" };
 
-      // Calculate spring timing based on approximate latitude of each state
-      // Get center latitude from state bounds
-      const coords = state.geometry.coordinates;
-      let centerLat;
+  // Generate square grid
+  const grid = turf.squareGrid(bbox, cellSide, options);
 
-      // Simple latitude approximation for each state
-      const stateLatitudes = {
-        Alabama: 32.8,
-        Alaska: 64.2,
-        Arizona: 34.0,
-        Arkansas: 34.8,
-        California: 36.8,
-        Colorado: 39.0,
-        Connecticut: 41.6,
-        Delaware: 39.0,
-        Florida: 28.0,
-        Georgia: 32.6,
-        Hawaii: 20.0,
-        Idaho: 44.0,
-        Illinois: 40.0,
-        Indiana: 40.0,
-        Iowa: 42.0,
-        Kansas: 38.5,
-        Kentucky: 37.5,
-        Louisiana: 31.0,
-        Maine: 45.5,
-        Maryland: 39.0,
-        Massachusetts: 42.3,
-        Michigan: 44.3,
-        Minnesota: 46.0,
-        Mississippi: 32.7,
-        Missouri: 38.3,
-        Montana: 47.0,
-        Nebraska: 41.5,
-        Nevada: 39.0,
-        "New Hampshire": 43.7,
-        "New Jersey": 40.0,
-        "New Mexico": 34.5,
-        "New York": 43.0,
-        "North Carolina": 35.5,
-        "North Dakota": 47.5,
-        Ohio: 40.2,
-        Oklahoma: 35.5,
-        Oregon: 44.0,
-        Pennsylvania: 41.0,
-        "Rhode Island": 41.7,
-        "South Carolina": 34.0,
-        "South Dakota": 44.5,
-        Tennessee: 35.8,
-        Texas: 31.0,
-        Utah: 39.3,
-        Vermont: 44.0,
-        Virginia: 37.5,
-        Washington: 47.5,
-        "West Virginia": 38.5,
-        Wisconsin: 44.5,
-        Wyoming: 43.0,
-      };
+  // Create a single unioned polygon of all continental US states for faster intersection testing
+  const continentalStates = statesGeoJSON.features.filter(
+    (state) =>
+      state.properties.name !== "Alaska" &&
+      state.properties.name !== "Hawaii"
+  );
 
-      centerLat = stateLatitudes[stateName] || 40.0;
+  // Use bounding box pre-filter to reduce expensive polygon checks
+  const filteredFeatures = [];
+  
+  for (const square of grid.features) {
+    const center = turf.center(square);
+    const [lon, lat] = center.geometry.coordinates;
 
-      // Calculate spring_day based on latitude
-      // Southern states (lat ~25): start around day 60 (early March)
-      // Northern states (lat ~50): start around day 120 (late April)
+    // Check if this square intersects with any US state
+    let intersects = false;
+    for (const state of continentalStates) {
+      if (turf.booleanPointInPolygon(center, state)) {
+        intersects = true;
+        break;
+      }
+    }
 
-      // Linear interpolation: lat 25 = day 60, lat 50 = day 120
-      const springDay = Math.round(60 + ((centerLat - 25) / 25) * 60);
-      const clampedSpringDay = Math.max(60, Math.min(140, springDay)); // Clamp between 60-140
+    if (!intersects) continue;
 
-      return {
-        type: "Feature",
-        properties: {
-          ...state.properties,
-          spring_day: clampedSpringDay,
-          center_lat: centerLat,
-        },
-        geometry: state.geometry,
-      };
+    // Calculate spring_day based on latitude
+    // Southern (lat ~25): start around day 60 (early March)
+    // Northern (lat ~50): start around day 120 (late April)
+    const springDay = Math.round(60 + ((lat - 25) / 25) * 60);
+    const clampedSpringDay = Math.max(60, Math.min(140, springDay));
+
+    filteredFeatures.push({
+      ...square,
+      properties: {
+        spring_day: clampedSpringDay,
+        lat: lat,
+        lon: lon,
+      },
     });
+  }
 
   return {
     type: "FeatureCollection",
-    features: features,
+    features: filteredFeatures,
   };
 }
-
 // Create major interstate highways data
 async function createMajorHighways() {
-  // Major interstate highways with approximate coordinates
-  const highways = [
-    // I-5 (West Coast: Seattle to San Diego)
-    {
-      name: "I-5",
-      coords: [
-        [-122.3, 47.6],
-        [-122.5, 45.5],
-        [-121.5, 43.0],
-        [-122.0, 40.0],
-        [-121.5, 38.5],
-        [-120.0, 36.0],
-        [-118.2, 34.0],
-        [-117.2, 32.7],
-      ],
-    },
-
-    // I-10 (Southern: LA to Jacksonville)
-    {
-      name: "I-10",
-      coords: [
-        [-118.2, 34.0],
-        [-114.0, 33.5],
-        [-111.0, 33.4],
-        [-110.0, 32.2],
-        [-106.5, 31.8],
-        [-103.5, 31.5],
-        [-100.0, 30.5],
-        [-97.7, 30.3],
-        [-95.4, 29.8],
-        [-91.0, 30.4],
-        [-89.0, 30.1],
-        [-87.2, 30.4],
-        [-85.0, 30.4],
-        [-81.7, 30.3],
-      ],
-    },
-
-    // I-95 (East Coast: Miami to Maine)
-    {
-      name: "I-95",
-      coords: [
-        [-80.2, 25.8],
-        [-80.2, 26.7],
-        [-80.1, 28.5],
-        [-81.3, 29.7],
-        [-81.0, 30.3],
-        [-80.9, 32.0],
-        [-79.9, 33.0],
-        [-78.9, 34.0],
-        [-77.9, 35.8],
-        [-77.5, 38.9],
-        [-75.5, 39.7],
-        [-75.2, 40.0],
-        [-74.0, 40.7],
-        [-73.8, 41.0],
-        [-72.9, 41.3],
-        [-71.4, 41.8],
-        [-71.1, 42.4],
-        [-70.3, 43.7],
-        [-69.8, 44.3],
-        [-68.8, 45.4],
-      ],
-    },
-
-    // I-80 (Northern: San Francisco to New York)
-    {
-      name: "I-80",
-      coords: [
-        [-122.4, 37.8],
-        [-121.0, 38.5],
-        [-120.0, 39.3],
-        [-117.0, 40.8],
-        [-114.0, 41.1],
-        [-111.9, 41.0],
-        [-110.0, 41.3],
-        [-107.0, 41.2],
-        [-104.9, 39.7],
-        [-102.0, 41.0],
-        [-100.0, 41.2],
-        [-96.5, 41.3],
-        [-95.9, 41.2],
-        [-93.6, 41.6],
-        [-90.7, 41.5],
-        [-88.0, 41.8],
-        [-87.6, 41.8],
-        [-85.0, 41.7],
-        [-83.0, 41.4],
-        [-81.7, 41.5],
-        [-80.5, 40.4],
-        [-79.0, 40.4],
-        [-77.0, 40.3],
-        [-76.0, 40.2],
-        [-75.2, 40.0],
-        [-74.0, 40.7],
-      ],
-    },
-
-    // I-40 (Mid-latitude: Barstow to Wilmington)
-    {
-      name: "I-40",
-      coords: [
-        [-117.0, 34.9],
-        [-114.0, 35.0],
-        [-111.0, 35.2],
-        [-109.0, 35.1],
-        [-106.6, 35.1],
-        [-104.0, 35.5],
-        [-103.0, 35.2],
-        [-100.3, 35.2],
-        [-97.5, 35.5],
-        [-95.4, 35.4],
-        [-94.0, 35.4],
-        [-92.3, 35.2],
-        [-90.0, 35.1],
-        [-89.9, 35.2],
-        [-88.0, 35.0],
-        [-86.8, 36.2],
-        [-85.0, 36.0],
-        [-84.0, 35.5],
-        [-82.5, 35.6],
-        [-81.0, 35.8],
-        [-79.0, 36.0],
-        [-78.0, 35.5],
-        [-77.9, 34.2],
-      ],
-    },
-
-    // I-90 (Northern: Seattle to Boston)
-    {
-      name: "I-90",
-      coords: [
-        [-122.3, 47.6],
-        [-119.0, 47.0],
-        [-117.4, 47.7],
-        [-116.0, 47.7],
-        [-114.0, 46.9],
-        [-112.0, 46.6],
-        [-110.0, 45.8],
-        [-108.5, 45.8],
-        [-104.0, 44.1],
-        [-103.0, 43.7],
-        [-100.0, 43.5],
-        [-96.7, 43.5],
-        [-93.2, 44.0],
-        [-91.0, 43.8],
-        [-90.0, 43.0],
-        [-87.9, 43.0],
-        [-85.7, 42.3],
-        [-83.0, 41.8],
-        [-81.0, 41.5],
-        [-80.0, 42.1],
-        [-78.7, 42.9],
-        [-77.6, 43.2],
-        [-76.1, 43.0],
-        [-75.0, 42.7],
-        [-73.8, 42.7],
-        [-73.0, 42.4],
-        [-71.1, 42.4],
-      ],
-    },
-
-    // I-70 (Central: Utah to Maryland)
-    {
-      name: "I-70",
-      coords: [
-        [-112.0, 38.5],
-        [-109.0, 38.8],
-        [-107.0, 39.1],
-        [-105.0, 39.7],
-        [-104.9, 39.7],
-        [-102.0, 39.3],
-        [-100.0, 39.4],
-        [-97.0, 39.0],
-        [-95.2, 39.1],
-        [-94.6, 39.1],
-        [-93.0, 38.9],
-        [-91.2, 38.8],
-        [-90.2, 38.6],
-        [-89.0, 38.6],
-        [-87.5, 39.8],
-        [-86.1, 39.8],
-        [-85.0, 39.8],
-        [-84.5, 39.1],
-        [-83.0, 40.0],
-        [-81.5, 40.1],
-        [-80.7, 40.0],
-        [-79.0, 39.7],
-        [-77.7, 39.6],
-        [-77.0, 39.3],
-      ],
-    },
-
-    // I-75 (North-South: Michigan to Florida)
-    {
-      name: "I-75",
-      coords: [
-        [-84.4, 46.5],
-        [-84.7, 45.0],
-        [-84.0, 43.4],
-        [-83.7, 43.0],
-        [-83.0, 42.3],
-        [-84.0, 41.7],
-        [-83.6, 41.4],
-        [-83.5, 39.1],
-        [-84.5, 39.1],
-        [-84.4, 38.0],
-        [-84.3, 37.0],
-        [-84.1, 36.6],
-        [-83.9, 36.0],
-        [-84.3, 35.0],
-        [-84.5, 34.0],
-        [-83.8, 33.8],
-        [-83.7, 33.0],
-        [-83.3, 31.2],
-        [-83.0, 30.4],
-        [-82.6, 29.7],
-        [-82.5, 28.0],
-        [-82.4, 27.3],
-        [-82.3, 26.1],
-      ],
-    },
-
-    // I-35 (Central North-South: Minnesota to Texas)
-    {
-      name: "I-35",
-      coords: [
-        [-93.3, 46.7],
-        [-93.2, 45.0],
-        [-93.1, 44.0],
-        [-93.2, 43.0],
-        [-94.0, 41.6],
-        [-93.6, 41.6],
-        [-93.6, 40.8],
-        [-94.6, 39.1],
-        [-94.8, 38.9],
-        [-95.2, 38.9],
-        [-95.7, 38.0],
-        [-96.8, 37.7],
-        [-97.3, 37.7],
-        [-97.5, 36.2],
-        [-97.5, 35.5],
-        [-97.5, 34.0],
-        [-97.3, 32.8],
-        [-97.7, 30.3],
-        [-98.5, 29.4],
-      ],
-    },
-  ];
-
-  const features = highways.map((highway) => ({
-    type: "Feature",
-    properties: {
-      name: highway.name,
-    },
-    geometry: {
-      type: "LineString",
-      coordinates: highway.coords,
-    },
-  }));
-
-  return {
-    type: "FeatureCollection",
-    features: features,
-  };
-}
+  // Placeholder function - in a real implementation, fetch and process highway data
+};
 
 export default Map;
