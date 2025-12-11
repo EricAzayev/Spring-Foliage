@@ -10,6 +10,7 @@ const Map = ({ dayOfYear }) => {
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
   const [geoTiffData, setGeoTiffData] = useState(null);
+  const gridCache = useRef(null); // Cache the grid to avoid regenerating
 
   const foliageColors = {
     none: "#4B3621",
@@ -117,13 +118,14 @@ const Map = ({ dayOfYear }) => {
           "line-width": 0.7,
         },
       });
-      // Add foliage grid overlay (3-mile squares)
+      // Add foliage grid overlay (5-mile squares)
       map.current.addSource("foliage", {
         type: "geojson",
         data: {
           type: "FeatureCollection",
           features: [],
         },
+        generateId: true, // Enable feature state for better GPU performance
       });
 
       // Base terrain layer for US states (light tan/beige)
@@ -173,9 +175,11 @@ const Map = ({ dayOfYear }) => {
           .then((data) => {
             map.current.getSource("state-borders").setData(data);
 
-            // Create grid with GeoTIFF data (if available)
-            const foliageGrid = createFoliageGrid(data, geoTiffData);
-            map.current.getSource("foliage").setData(foliageGrid);
+            // Create grid with GeoTIFF data (if available) - only once
+            if (!gridCache.current) {
+              gridCache.current = createFoliageGrid(data, geoTiffData);
+            }
+            map.current.getSource("foliage").setData(gridCache.current);
           })
           .catch((err) => console.log("Could not load state borders:", err));
       });
