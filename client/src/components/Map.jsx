@@ -133,6 +133,7 @@ const Map = ({ dayOfYear }) => {
         paint: {
           "fill-color": foliageColors.none,
           "fill-opacity": 0.85,
+          "fill-antialias": false, // Remove borders between tiles
         },
       });
 
