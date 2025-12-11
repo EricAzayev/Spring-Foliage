@@ -11,3 +11,15 @@ The Spring Foliage Map provides scientific use for any audience, from researcher
 
 Originality: Surprisingly, while a Fall Foliage map exists, providing powerful and accurate fall foliage reports around the country, no such map exists for the sibling of Autumn, Spring. 
 
+
+Data Interaction with Map:
+| Stage      | Formula (relative to First Bloom DOY) |
+| ---------- | ------------------------------------- |
+| None       | Before First Bloom − 15 days          |
+| Budding    | First Bloom − 10 days                 |
+| First Leaf | First Bloom − 5 days                  |
+| Bloom      | First Bloom                           |
+| Peak Bloom | First Bloom + 3 days                  |
+| Canopy     | First Bloom + 10 days                 |
+| Post       | First Bloom + 20–30 days              |
+

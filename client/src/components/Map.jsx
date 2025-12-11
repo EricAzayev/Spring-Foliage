@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import * as turf from "@turf/turf";
+import * as GeoTIFF from "geotiff";
 import "./Map.css";
 
 const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
+  const [geoTiffData, setGeoTiffData] = useState(null);
 
   const foliageColors = {
     none: "#4B3621",
@@ -145,19 +147,26 @@ const Map = ({ dayOfYear }) => {
         },
       });
 
-      // Load US states GeoJSON from a public source
-      fetch(
-        "https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json"
-      )
-        .then((response) => response.json())
-        .then((data) => {
-          map.current.getSource("state-borders").setData(data);
+      // Load GeoTIFF spring bloom data first, then create grid with that data
+      loadGeoTIFF("/SpringBloom_30yr.tif").then((geoTiffData) => {
+        if (geoTiffData) {
+          setGeoTiffData(geoTiffData);
+        }
 
-          // Create 3-mile grid squares with foliage data
-          const foliageGrid = createFoliageGrid(data);
-          map.current.getSource("foliage").setData(foliageGrid);
-        })
-        .catch((err) => console.log("Could not load state borders:", err));
+        // Load US states GeoJSON from a public source
+        fetch(
+          "https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json"
+        )
+          .then((response) => response.json())
+          .then((data) => {
+            map.current.getSource("state-borders").setData(data);
+
+            // Create grid with GeoTIFF data (if available)
+            const foliageGrid = createFoliageGrid(data, geoTiffData);
+            map.current.getSource("foliage").setData(foliageGrid);
+          })
+          .catch((err) => console.log("Could not load state borders:", err));
+      });
     });
 
     return () => {
@@ -173,30 +182,30 @@ const Map = ({ dayOfYear }) => {
     if (!map.current || !map.current.loaded()) return;
 
     // This will update the foliage layer based on the day
-    // For now, we'll use a simple gradient effect from south to north
+    // Color tiles based on current day relative to their spring_day (first bloom DOY)
     try {
       map.current.setPaintProperty("foliage-fill", "fill-color", [
         "interpolate",
         ["linear"],
         ["get", "spring_day"],
         0,
-        foliageColors.none,
-        dayOfYear - 30,
-        foliageColors.none,
-        dayOfYear - 20,
-        foliageColors.budding,
-        dayOfYear - 10,
-        foliageColors.firstLeaf,
-        dayOfYear,
-        foliageColors.firstBloom,
-        dayOfYear + 10,
-        foliageColors.peakBloom,
-        dayOfYear + 20,
+        foliageColors.postBloom,
+        dayOfYear - 20, // Post bloom stage (after +20 days)
+        foliageColors.postBloom,
+        dayOfYear - 10, // Canopy stage (+10 days from bloom)
         foliageColors.canopy,
-        dayOfYear + 30,
-        foliageColors.postBloom,
+        dayOfYear - 3, // Peak bloom stage (+3 days from bloom)
+        foliageColors.peakBloom,
+        dayOfYear, // First bloom (DOY from GeoTIFF)
+        foliageColors.firstBloom,
+        dayOfYear + 5, // First leaf stage (-5 days before bloom)
+        foliageColors.firstLeaf,
+        dayOfYear + 10, // Budding stage (-10 days before bloom)
+        foliageColors.budding,
+        dayOfYear + 15, // None stage (-15 days before bloom)
+        foliageColors.none,
         200,
-        foliageColors.postBloom,
+        foliageColors.none,
       ]);
     } catch (e) {
       console.log("Error updating foliage colors:", e);
@@ -247,10 +256,10 @@ const Map = ({ dayOfYear }) => {
 
 // Create foliage data from actual US state boundaries
 // Create larger grid squares for better performance
-function createFoliageGrid(statesGeoJSON) {
+function createFoliageGrid(statesGeoJSON, geoTiffData = null) {
   // Continental US bounds
   const bbox = [-130, 24, -65, 50];
-  const cellSide = 5; // miles (increased from 3 for much better performance)
+  const cellSide = 5; // miles
   const options = { units: "miles" };
 
   // Generate square grid
@@ -281,11 +290,16 @@ function createFoliageGrid(statesGeoJSON) {
 
     if (!intersects) continue;
 
-    // Calculate spring_day based on latitude
-    // Southern (lat ~25): start around day 60 (early March)
-    // Northern (lat ~50): start around day 120 (late April)
-    const springDay = Math.round(60 + ((lat - 25) / 25) * 60);
-    const clampedSpringDay = Math.max(60, Math.min(140, springDay));
+    // Get spring_day from GeoTIFF data if available, otherwise use latitude-based calculation
+    let springDay;
+    if (geoTiffData) {
+      springDay = sampleGeoTIFFAtPoint(lon, lat, geoTiffData);
+    } else {
+      // Fallback: Calculate spring_day based on latitude
+      springDay = Math.round(60 + ((lat - 25) / 25) * 60);
+    }
+    
+    const clampedSpringDay = Math.max(60, Math.min(140, springDay || 90));
 
     filteredFeatures.push({
       ...square,
@@ -302,6 +316,57 @@ function createFoliageGrid(statesGeoJSON) {
     features: filteredFeatures,
   };
 }
+
+// Sample GeoTIFF data at a specific lat/lon point
+function sampleGeoTIFFAtPoint(lon, lat, geoTiffData) {
+  const { rasterData, width, height, bbox } = geoTiffData;
+  const [west, south, east, north] = bbox;
+
+  // Convert lat/lon to pixel coordinates
+  const xRatio = (lon - west) / (east - west);
+  const yRatio = (north - lat) / (north - south);
+
+  const pixelX = Math.floor(xRatio * width);
+  const pixelY = Math.floor(yRatio * height);
+
+  // Bounds check
+  if (pixelX < 0 || pixelX >= width || pixelY < 0 || pixelY >= height) {
+    return null;
+  }
+
+  const pixelIndex = pixelY * width + pixelX;
+  const value = rasterData[pixelIndex];
+
+  // Return null for nodata values
+  if (value < 1 || value > 365) {
+    return null;
+  }
+
+  return value;
+}
+
+// Load GeoTIFF spring bloom data
+async function loadGeoTIFF(url) {
+  try {
+    const tiff = await GeoTIFF.fromUrl(url);
+    const image = await tiff.getImage();
+    const rasterData = await image.readRasters();
+    const width = image.getWidth();
+    const height = image.getHeight();
+    const bbox = image.getBoundingBox(); // [west, south, east, north]
+
+    return {
+      rasterData: rasterData[0], // First band contains DOY values
+      width,
+      height,
+      bbox,
+    };
+  } catch (error) {
+    console.error("Error loading GeoTIFF:", error);
+    return null;
+  }
+}
+
 // Create major interstate highways data
 async function createMajorHighways() {
   // Placeholder function - in a real implementation, fetch and process highway data
