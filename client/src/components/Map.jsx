@@ -14,12 +14,23 @@ const Map = ({ dayOfYear }) => {
   const foliageColors = {
     none: "#4B3621",
     budding: "#A67B5B",
-    firstLeaf: "#ADFF2F",
+    firstLeaf: "#C9D96F",
     firstBloom: "#DA70D6",
     peakBloom: "#800080",
-    canopy: "#228B22",
+    canopy: "#ADFF2F",
     postBloom: "#006400",
   };
+
+
+//   const foliageColors = {
+//   none:       "#5C4A3D", // dormant brown
+//   budding:    "#A98274", // light brown/rose (buds swelling)
+//   firstLeaf:  "#C9D96F", // soft yellow-green (emerging leaves)
+//   firstBloom: "#E69AC2", // pastel pink (flowers opening)
+//   peakBloom:  "#C257A1", // richer magenta (peak flowers)
+//   canopy:     "#5FA85D", // healthy mid-green (full canopy)
+//   post:       "#3F6941"  // dark green (post-bloom maturity)
+// };
 
   // Toggle between 2D and 3D view
   const toggle3DView = () => {
@@ -260,7 +271,7 @@ const Map = ({ dayOfYear }) => {
 function createFoliageGrid(statesGeoJSON, geoTiffData = null) {
   // Continental US bounds
   const bbox = [-130, 24, -65, 50];
-  const cellSide = 5; // miles
+  const cellSide = 3; // miles
   const options = { units: "miles" };
 
   // Generate square grid

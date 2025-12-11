@@ -3,8 +3,8 @@ import Map from "./components/Map";
 import "./App.css";
 
 function App() {
-  const [currentDate, setCurrentDate] = useState(new Date(2025, 3, 12)); // April 12, 2025
-  const [dayOfYear, setDayOfYear] = useState(102);
+  const [currentDate, setCurrentDate] = useState(new Date(2025, 1, 23)); // February 23, 2025
+  const [dayOfYear, setDayOfYear] = useState(54); // Day 54 = February 23
 
   const colorLegend = [
     { color: "#4a3728", label: "None" },
@@ -68,14 +68,14 @@ function App() {
         </div>
         <input
           type="range"
-          min="60"
+          min="54"
           max="180"
           value={dayOfYear}
           onChange={handleSliderChange}
           className="date-slider"
         />
         <div className="slider-labels">
-          <span>March 1</span>
+          <span>February 23</span>
           <span>June 29</span>
         </div>
       </div>
