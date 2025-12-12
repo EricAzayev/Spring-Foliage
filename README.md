@@ -1,6 +1,47 @@
 # Spring-Foliage
 Short and Simple: Interactive US map that shows the progression of Spring across the U.S. over time, using a date slider to visualize peak foliage by region.
 
+## Getting Started
+
+### Prerequisites
+- Node.js (v16 or higher)
+- npm
+- MapTiler API key (free tier available at [maptiler.com](https://maptiler.com))
+
+### Installation
+
+1. Clone the repository
+```bash
+git clone <repository-url>
+cd Spring-Foliage
+```
+
+2. Install dependencies
+```bash
+cd client
+npm install
+```
+
+3. Set up environment variables
+   - Create a `.env` file in the `client` folder
+   - Add your MapTiler API key:
+```
+VITE_MAPTILER_KEY=your_api_key_here
+```
+
+4. Run the development server
+```bash
+npm run dev
+```
+
+5. Open your browser to the URL shown in the terminal (typically `http://localhost:5173`)
+
+### Building for Production
+```bash
+npm run build
+npm run preview
+```
+
 
 
 Title: Spring Foliage Map
