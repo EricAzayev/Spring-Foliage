@@ -41,19 +41,35 @@ const Map = ({ dayOfYear }) => {
     setIs3DView(newIs3D);
 
     if (newIs3D) {
-      // Switch to 3D side view
+      // Switch to 3D side view with terrain visible
       map.current.easeTo({
         pitch: 60,
-        bearing: 0,
+        bearing: -20,
+        zoom: 4.5,
         duration: 1000,
       });
+      // Enhance terrain exaggeration for 3D view
+      if (map.current.getTerrain()) {
+        map.current.setTerrain({
+          source: "terrain",
+          exaggeration: 2.5,
+        });
+      }
     } else {
       // Switch back to top-down view
       map.current.easeTo({
         pitch: 0,
         bearing: 0,
+        zoom: 3.5,
         duration: 1000,
       });
+      // Reduce terrain exaggeration for top-down view
+      if (map.current.getTerrain()) {
+        map.current.setTerrain({
+          source: "terrain",
+          exaggeration: 1.5,
+        });
+      }
     }
   };
 
@@ -72,9 +88,27 @@ const Map = ({ dayOfYear }) => {
         [-130, 24], // Southwest coordinates (continental US only)
         [-65, 50], // Northeast coordinates (continental US only)
       ],
+      // Enable terrain
+      maxPitch: 85,
+      antialias: true,
     });
 
     map.current.on("load", () => {
+      // Add terrain source - using MapTiler terrain-rgb tiles (free tier)
+      // Get your free API key at https://maptiler.com
+      map.current.addSource("terrain", {
+        type: "raster-dem",
+        url: `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${import.meta.env.VITE_MAPTILER_KEY}`,
+        tileSize: 256,
+        maxzoom: 14,
+      });
+
+      // Set terrain for 3D effect
+      map.current.setTerrain({
+        source: "terrain",
+        exaggeration: 1.5, // Vertical exaggeration factor
+      });
+
       // Hide all base map layers to remove other countries
       const layers = map.current.getStyle().layers;
 
