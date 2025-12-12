@@ -1,6 +1,6 @@
 # Spring-Foliage
 Short and Simple: Interactive US map that shows the progression of Spring across the U.S. over time, using a date slider to visualize peak foliage by region.
-
+Demo Video: https://youtu.be/J9V05LNUCoU
 ## Getting Started
 
 ### Prerequisites
