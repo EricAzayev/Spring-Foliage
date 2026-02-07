@@ -1,5 +1,26 @@
 # Spring-Foliage
 Short and Simple: Interactive US map that shows the progression of Spring across the U.S. over time, using a date slider to visualize peak foliage by region.
+Demo Video: https://youtu.be/J9V05LNUCoU
+
+
+
+https://github.com/user-attachments/assets/92ee911f-51ec-41ef-abdb-fb974d25dc54
+
+
+
+###Current Issue: Rendering is too intensive
+
+
+https://github.com/user-attachments/assets/5e70ae09-e687-42b3-a2ea-2f07285b0206
+
+
+
+Optimizing Before Deployment. The Current Map rerenders the entire map for every date, causing memory drag and large GPU performance demands.
+Current Plan: Developing a data generator that creates the data once for the client. As the user zooms in, tiles will get smaller and more detailed.
+
+Future Plan: Download topography data to avoid extra API usage.
+
+
 
 ## Getting Started
 
