@@ -2,3 +2,13 @@
 .vscode
 
 .env
+
+# Python
+data_generator/__pycache__/
+*.py[cod]
+
+# Virtual Environments
+data_generator/gpu_foliage/
+
+# Generated Assets
+client/public/tiles/
