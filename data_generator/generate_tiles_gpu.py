@@ -25,13 +25,13 @@ from cupyx.scipy.ndimage import map_coordinates
 GEOTIFF_PATH = "../client/public/SpringBloom_30yr.tif"
 OUTPUT_DIR = "../client/public/tiles"
 MIN_ZOOM = 4
-MAX_ZOOM = 12
+MAX_ZOOM = 8
 TILE_SIZE = 256
 
 # Day range and interval
-DAY_START = 60
-DAY_END = 140
-DAY_INTERVAL = 5
+DAY_START = 53
+DAY_END = 62
+DAY_INTERVAL = 1
 
 # Batch size for parallel tile processing
 BATCH_SIZE = 32
@@ -188,6 +188,10 @@ def render_tile_gpu(source_data_gpu, transform, src_width, src_height, tile, cur
     # Transfer to CPU
     rgba_cpu = cp.asnumpy(rgba)
     
+    # Ensure it's C-contiguous (though asnumpy usually is)
+    if not rgba_cpu.flags['C_CONTIGUOUS']:
+        rgba_cpu = np.ascontiguousarray(rgba_cpu)
+        
     return rgba_cpu
 
 
@@ -206,7 +210,10 @@ def save_tile(tile_data, tile, day_dir):
     
     tile_path = tile_dir / f"{tile.y}.png"
     img = Image.fromarray(tile_data, mode='RGBA')
-    img.save(tile_path, "PNG", optimize=True)
+    # Disabling optimization (optimize=False) significantly speeds up generation by 
+    # skipping extra CPU-intensive compression passes. This also helps avoid 
+    # potential serving/decoding issues on development servers.
+    img.save(tile_path, "PNG", optimize=False)
 
 
 def generate_tiles_for_day_gpu(source_data_gpu, transform, src_width, src_height, day, output_base_dir):
