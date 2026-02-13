@@ -27,7 +27,7 @@ TILE_SIZE = 256
 
 # Day range and interval
 DAY_START = 53
-DAY_END = 110
+DAY_END = 180
 DAY_INTERVAL = 1
 
 # Grid cell size in miles (matching CPU mode precisely)
