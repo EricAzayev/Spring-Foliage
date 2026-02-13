@@ -24,13 +24,13 @@ from cupyx.scipy.ndimage import map_coordinates
 # Configuration
 GEOTIFF_PATH = "../client/public/SpringBloom_30yr.tif"
 OUTPUT_DIR = "../client/public/tiles"
-MIN_ZOOM = 4
-MAX_ZOOM = 8
+MIN_ZOOM = 5
+MAX_ZOOM = 9
 TILE_SIZE = 256
 
 # Day range and interval
 DAY_START = 53
-DAY_END = 62
+DAY_END = 59
 DAY_INTERVAL = 1
 
 # Batch size for parallel tile processing
@@ -204,12 +204,40 @@ def save_tile(tile_data, tile, day_dir):
         tile: mercantile.Tile object
         day_dir: Base directory for this day
     """
+    from PIL import ImageDraw, ImageFont
+    
     zoom_dir = day_dir / str(tile.z)
     tile_dir = zoom_dir / str(tile.x)
     tile_dir.mkdir(parents=True, exist_ok=True)
     
     tile_path = tile_dir / f"{tile.y}.png"
     img = Image.fromarray(tile_data, mode='RGBA')
+    
+    # Add debug text overlay showing tile coordinates
+    draw = ImageDraw.Draw(img)
+    text = f"z={tile.z} x={tile.x} y={tile.y}"
+    
+    # Use default font (try to use a larger font if available)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+    except:
+        font = ImageFont.load_default()
+    
+    # Draw text with black background for visibility
+    # Get text bounding box
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
+    # Position at top-left corner
+    x, y = 5, 5
+    
+    # Draw semi-transparent background rectangle
+    draw.rectangle([x-2, y-2, x+text_width+2, y+text_height+2], fill=(255, 255, 255, 200))
+    
+    # Draw black text
+    draw.text((x, y), text, fill=(0, 0, 0, 255), font=font)
+    
     # Disabling optimization (optimize=False) significantly speeds up generation by 
     # skipping extra CPU-intensive compression passes. This also helps avoid 
     # potential serving/decoding issues on development servers.
