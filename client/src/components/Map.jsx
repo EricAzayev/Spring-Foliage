@@ -13,6 +13,7 @@ const Map = ({ dayOfYear }) => {
   const [currentZoom, setCurrentZoom] = useState(3);
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const gridCache = useRef(null);
+  const activeLayerIdx = useRef(1); // Track which double-buffered layer is current
 
   const MAX_GEN_ZOOM = 10; // Constant indicating what we've generated
 
@@ -66,25 +67,19 @@ const Map = ({ dayOfYear }) => {
       maxBounds: [[-130, 24], [-65, 50]],
       maxPitch: 85,
       antialias: true,
-      // Handle 404s gracefully to avoid InvalidStateError (source image could not be decoded)
       transformRequest: (url, resourceType) => {
-        if (resourceType === 'Tile' && url.includes('/tiles/')) {
-          // Extract z/x/y from URL for logging
-          const match = url.match(/\/tiles\/day_\d+\/(\d+)\/(\d+)\/(\d+)\.png/);
-          if (match) {
-            console.log(`🗺️ Requesting tile: z=${match[1]}, x=${match[2]}, y=${match[3]}`);
-          }
-          return {
-            url: url,
-            collectStats: false
-          };
+        if (resourceType === "Tile") {
+          console.log("Requested tile:", url);
         }
+        return { url };
       }
     });
 
     // Update zoom level state
     map.current.on("move", () => {
-      setCurrentZoom(map.current.getZoom());
+      const zoom = map.current.getZoom();
+      setCurrentZoom(zoom);
+      //console.log("Current zoom level:", zoom);
     });
 
     map.current.on("load", () => {
@@ -129,21 +124,27 @@ const Map = ({ dayOfYear }) => {
         paint: { "fill-color": "#E8DCC8", "fill-opacity": 1 },
       });
 
-      // 1. MODULE: Tiles Mode (using zoom 5 tiles for perfect alignment)
-      map.current.addSource("foliage-tiles", {
-        type: "raster",
-        tiles: [`${window.location.origin}/tiles/day_${String(currentSnapDay).padStart(3, '0')}/{z}/{x}/{y}.png`],
-        tileSize: 256,
-        minzoom: 5,
-        maxzoom: 5,
-      });
+      // --- Double-buffered sources/layers for smooth transitions ---
+      [1, 2].forEach(idx => {
+        map.current.addSource(`foliage-tiles-${idx}`, {
+          type: "raster",
+          tiles: [`${window.location.origin}/tiles/day_${String(currentSnapDay).padStart(3, '0')}/{z}/{x}/{y}.png`],
+          tileSize: 256,
+          minzoom: 5,
+          maxzoom: 5,
+          bounds: [-125, 24, -66, 50],
+        });
 
-      map.current.addLayer({
-        id: "foliage-layer-tiles",
-        type: "raster",
-        source: "foliage-tiles",
-        paint: { "raster-opacity": 0.85, "raster-fade-duration": 0 },
-        layout: { "visibility": mapMode === "tiles" ? "visible" : "none" }
+        map.current.addLayer({
+          id: `foliage-layer-${idx}`,
+          type: "raster",
+          source: `foliage-tiles-${idx}`,
+          paint: {
+            "raster-opacity": idx === 1 ? 0.85 : 0,
+            "raster-fade-duration": 0
+          },
+          layout: { "visibility": mapMode === "tiles" ? "visible" : "none" }
+        });
       });
 
       // 2. MODULE: CPU Mode (GeoJSON)
@@ -188,19 +189,6 @@ const Map = ({ dayOfYear }) => {
             }
           });
       });
-
-      // Log tile source events for debugging
-      map.current.on('sourcedataloading', (e) => {
-        if (e.sourceId === 'foliage-tiles' && e.tile) {
-          console.log(`📥 Loading foliage tile: z=${e.tile.tileID.canonical.z}, x=${e.tile.tileID.canonical.x}, y=${e.tile.tileID.canonical.y}`);
-        }
-      });
-
-      map.current.on('error', (e) => {
-        if (e.error && e.error.message && e.error.message.includes('tile')) {
-          console.error('❌ Tile error:', e.error);
-        }
-      });
     });
 
     return () => {
@@ -216,9 +204,11 @@ const Map = ({ dayOfYear }) => {
     if (!map.current || !map.current.loaded() || !map.current.getStyle()) return;
 
     try {
-      if (map.current.getLayer("foliage-layer-tiles")) {
-        map.current.setLayoutProperty("foliage-layer-tiles", "visibility", mapMode === "tiles" ? "visible" : "none");
-      }
+      [1, 2].forEach(idx => {
+        if (map.current.getLayer(`foliage-layer-${idx}`)) {
+          map.current.setLayoutProperty(`foliage-layer-${idx}`, "visibility", mapMode === "tiles" ? "visible" : "none");
+        }
+      });
       if (map.current.getLayer("foliage-layer-cpu")) {
         map.current.setLayoutProperty("foliage-layer-cpu", "visibility", mapMode === "cpu" ? "visible" : "none");
       }
@@ -233,23 +223,24 @@ const Map = ({ dayOfYear }) => {
     if (!m || !m.isStyleLoaded()) return;
 
     if (mapMode === "tiles") {
-      const source = m.getSource("foliage-tiles");
+      const nextIdx = activeLayerIdx.current === 1 ? 2 : 1;
+      const currentIdx = activeLayerIdx.current;
+
+      const source = m.getSource(`foliage-tiles-${nextIdx}`);
       if (source && source.type === "raster") {
         const urlTemplate = `${window.location.origin}/tiles/day_${String(currentSnapDay).padStart(3, '0')}/{z}/{x}/{y}.png`;
 
-        console.log(`🔄 Switching to day ${currentSnapDay}, updating tile source...`);
         try {
+          // 1. Update the hidden layer's source
           source.setTiles([urlTemplate]);
 
-          // Clear cache and reload
-          if (source.clearTiles) {
-            source.clearTiles();
-          }
-          if (source.reload) {
-            source.reload();
-          }
+          // 2. Trigger cross-fade
+          // We swap opacities. MapLibre will render the new tiles as they load 
+          // while the old ones stay visible underneath/above until faded out.
+          m.setPaintProperty(`foliage-layer-${nextIdx}`, "raster-opacity", 0.85);
+          m.setPaintProperty(`foliage-layer-${currentIdx}`, "raster-opacity", 0);
 
-          console.log(`✅ Tile source updated for day ${currentSnapDay}`);
+          activeLayerIdx.current = nextIdx;
         } catch (e) {
           console.error("Error setting tiles:", e);
         }
@@ -282,17 +273,6 @@ const Map = ({ dayOfYear }) => {
       <div ref={mapContainer} className="map-container" />
 
       <div className="map-controls">
-        <div className="zoom-display">
-          <div className="zoom-row">
-            <span className="label">Map Zoom:</span>
-            <span className="value">{currentZoom.toFixed(1)}</span>
-          </div>
-          <div className="zoom-row">
-            <span className="label">Mode:</span>
-            <span className="value">{mapMode === "tiles" ? "Image Overlay (2mi grid)" : "CPU Rendering"}</span>
-          </div>
-        </div>
-
         <button
           onClick={toggle3DView}
           className="control-button"
@@ -300,13 +280,15 @@ const Map = ({ dayOfYear }) => {
         >
           {is3DView ? "Top View" : "3D View"}
         </button>
+      </div>
 
+      <div className="map-technical-controls">
         <button
           onClick={toggleMapMode}
-          className={`control-button mode-toggle ${mapMode === "cpu" ? "active" : ""}`}
+          className={`tech-button ${mapMode === "cpu" ? "active" : ""}`}
           disabled={mapMode === "cpu" && !geoTiffLoaded}
         >
-          <span>{mapMode === "tiles" ? "GeoTIFF (CPU)" : "Raster (Tiles)"}</span>
+          <span>{mapMode === "tiles" ? "View Technical (CPU)" : "Switch to Raster"}</span>
           {mapMode === "tiles" && !geoTiffLoaded && <span className="loading-dots">...</span>}
         </button>
       </div>

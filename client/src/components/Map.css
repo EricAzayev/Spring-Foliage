@@ -119,6 +119,40 @@
   cursor: not-allowed;
 }
 
+.map-technical-controls {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1000;
+}
+
+.tech-button {
+  padding: 6px 12px;
+  background-color: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  color: #666;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tech-button:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.8);
+  color: #2e2e2e;
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.tech-button.active {
+  background-color: #556b2f;
+  color: white;
+  border-color: #556b2f;
+  opacity: 0.9;
+}
+
 .dev-indicator {
   position: absolute;
   bottom: 20px;

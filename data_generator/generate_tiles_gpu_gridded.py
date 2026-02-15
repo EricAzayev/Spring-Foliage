@@ -22,7 +22,7 @@ from cupyx.scipy.ndimage import map_coordinates
 GEOTIFF_PATH = "../client/public/SpringBloom_30yr.tif"
 OUTPUT_DIR = "../client/public/tiles"
 MIN_ZOOM = 5
-MAX_ZOOM = 5  # Only generate zoom 5
+MAX_ZOOM = 5  
 TILE_SIZE = 256
 
 # Day range and interval
@@ -35,6 +35,9 @@ CELL_SIZE_MILES = 2
 
 # Batch size for parallel tile processing
 BATCH_SIZE = 32
+
+# Debug labels on tiles
+ENABLE_DEBUG_LABELS = False
 
 # Foliage color scheme (RGB)
 FOLIAGE_COLORS = {
@@ -167,16 +170,17 @@ def save_tile(tile_data, tile, day_dir):
     tile_path = tile_dir / f"{tile.y}.png"
     img = Image.fromarray(tile_data, mode='RGBA')
     
-    draw = ImageDraw.Draw(img)
-    text = f"z={tile.z} x={tile.x} y={tile.y}"
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-    except:
-        font = ImageFont.load_default()
-    
-    bbox = draw.textbbox((0, 0), text, font=font)
-    draw.rectangle([3, 3, 3 + (bbox[2]-bbox[0]) + 4, 3 + (bbox[3]-bbox[1]) + 4], fill=(255, 255, 255, 200))
-    draw.text((5, 5), text, fill=(0, 0, 0, 255), font=font)
+    if ENABLE_DEBUG_LABELS:
+        draw = ImageDraw.Draw(img)
+        text = f"z={tile.z} x={tile.x} y={tile.y}"
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        except:
+            font = ImageFont.load_default()
+        
+        bbox = draw.textbbox((0, 0), text, font=font)
+        draw.rectangle([3, 3, 3 + (bbox[2]-bbox[0]) + 4, 3 + (bbox[3]-bbox[1]) + 4], fill=(255, 255, 255, 200))
+        draw.text((5, 5), text, fill=(0, 0, 0, 255), font=font)
     
     img.save(tile_path, "PNG", optimize=False)
 
