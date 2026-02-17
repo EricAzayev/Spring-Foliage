@@ -3,6 +3,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import * as turf from "@turf/turf";
 import * as GeoTIFF from "geotiff";
+import { TERRAIN_CONFIG } from "../utils/terrainConfig.js";
 import "./Map.css";
 
 const Map = ({ dayOfYear }) => {
@@ -83,13 +84,8 @@ const Map = ({ dayOfYear }) => {
     });
 
     map.current.on("load", () => {
-      // Add terrain source (3D Topography)
-      map.current.addSource("terrain", {
-        type: "raster-dem",
-        url: `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${import.meta.env.VITE_MAPTILER_KEY}`,
-        tileSize: 256,
-        maxzoom: 14,
-      });
+      // Add terrain source (3D Topography) - uses free OpenTopoMap by default
+      map.current.addSource("terrain", TERRAIN_CONFIG);
 
       map.current.setTerrain({ source: "terrain", exaggeration: 1.5 });
 
@@ -110,10 +106,10 @@ const Map = ({ dayOfYear }) => {
         paint: { "background-color": "#D4E7F5" },
       });
 
-      // State Borders Source
+      // State Borders Source (cached locally)
       map.current.addSource("state-borders", {
         type: "geojson",
-        data: "https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json"
+        data: "/us-states.json"
       });
 
       // US Terrain Fill (light tan base)
@@ -178,7 +174,7 @@ const Map = ({ dayOfYear }) => {
       loadGeoTIFF("/SpringBloom_30yr.tif").then((geoTiffData) => {
         if (!geoTiffData) return;
 
-        fetch("https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json")
+        fetch("/us-states.json")
           .then(res => res.json())
           .then(data => {
             gridCache.current = createFoliageGrid(data, geoTiffData);
