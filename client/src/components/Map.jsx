@@ -10,7 +10,7 @@ const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
-  const [mapMode, setMapMode] = useState("cpu"); // Start with CPU while debugging GPU
+  const [mapMode, setMapMode] = useState("gpu"); // GPU mode now working (samples raster directly)
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const gridCache = useRef(null);
@@ -264,7 +264,12 @@ const Map = ({ dayOfYear }) => {
         // CPU mode color update may fail if map is not ready
       }
     } else if (mapMode === "gpu") {
-      // Process on GPU
+      // Process on GPU - wait for data to load
+      if (!geoTiffLoaded) {
+        console.log("GPU mode waiting for data to load...");
+        return;
+      }
+      
       if (geoTiffData.current && statesGeoJSON.current && gpuProcessor.current) {
         setIsProcessing(true);
         (async () => {
@@ -276,6 +281,16 @@ const Map = ({ dayOfYear }) => {
               dayOfYear
             );
             console.log(`GPU: Got ${gpuResults.features.length} features`);
+            
+            // Safety check - limit features to prevent MapLibre crashes
+            if (gpuResults.features.length > 50000) {
+              console.warn(`Too many features (${gpuResults.features.length}), downsampling...`);
+              // Keep every Nth feature to reduce count
+              const sampleRate = Math.ceil(gpuResults.features.length / 40000);
+              gpuResults.features = gpuResults.features.filter((_, i) => i % sampleRate === 0);
+              console.log(`Downsampled to ${gpuResults.features.length} features`);
+            }
+            
             const source = map.current.getSource("foliage-gpu");
             if (source) {
               source.setData(gpuResults);
@@ -295,39 +310,10 @@ const Map = ({ dayOfYear }) => {
             }
           } catch (e) {
             console.error("GPU processing failed:", e);
-            // Fallback to CPU mode
-            console.log("Falling back to CPU mode");
-            try {
-              const cpuResults = createFoliageGrid(statesGeoJSON.current, geoTiffData.current);
-              const source = map.current.getSource("foliage-gpu");
-              if (source) {
-                source.setData(cpuResults);
-                map.current.setPaintProperty("foliage-layer-gpu", "fill-color", [
-                  "interpolate", ["linear"], ["get", "spring_day"],
-                  0, foliageColors.postBloom,
-                  dayOfYear - 20, foliageColors.postBloom,
-                  dayOfYear - 10, foliageColors.canopy,
-                  dayOfYear - 3, foliageColors.peakBloom,
-                  dayOfYear, foliageColors.firstBloom,
-                  dayOfYear + 5, foliageColors.firstLeaf,
-                  dayOfYear + 10, foliageColors.budding,
-                  dayOfYear + 15, foliageColors.none,
-                  200, foliageColors.none,
-                ]);
-              }
-            } catch (fallbackError) {
-              console.error("Fallback CPU mode also failed:", fallbackError);
-            }
           } finally {
             setIsProcessing(false);
           }
         })();
-      } else {
-        console.warn("GPU mode not ready:", { 
-          hasTiff: !!geoTiffData.current, 
-          hasStates: !!statesGeoJSON.current, 
-          hasGPU: !!gpuProcessor.current 
-        });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -370,7 +356,7 @@ const Map = ({ dayOfYear }) => {
       
       {mapMode === "gpu" && (
         <div className="dev-indicator">
-          ⚡ GPU Acceleration Active {isProcessing && "⏳"}
+          ⚡ Vectorized GPU Sampling {isProcessing && "⏳"}
         </div>
       )}
     </div>

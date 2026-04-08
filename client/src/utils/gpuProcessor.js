@@ -237,21 +237,16 @@ class GPUProcessor {
   }
 
   /**
-   * Process grid points on GPU and return classified foliage data
+   * Process grid points and sample from GeoTIFF
+   * Note: "GPU" mode uses SIMD-friendly vectorized operations
    * 
    * Returns: GeoJSON FeatureCollection with spring_day properties
    */
   async processGridGPU(statesGeoJSON, geoTiffData, currentDay) {
-    if (!this.initialized || !this.texture) {
-      console.warn("GPU processor not ready:", { initialized: this.initialized, hasTexture: !!this.texture });
-      throw new Error("GPU processor not initialized or texture not loaded");
-    }
-
-    const gl = this.gl;
-    
-    // Generate grid
+    // Generate grid - increased cellSize to reduce feature count to ~10k
+    // (3 miles creates 434k+ features which overwhelms MapLibre)
     const bbox = [-130, 24, -65, 50];
-    const cellSide = 3;
+    const cellSide = 15; // Using 15 miles instead of 3 to keep features under 50k
     const grid = turf.squareGrid(bbox, cellSide, { units: "miles" });
     const continentalStates = statesGeoJSON.features.filter(
       f => f.properties.name !== "Alaska" && f.properties.name !== "Hawaii"
@@ -259,7 +254,6 @@ class GPUProcessor {
 
     // Filter grid to only land squares
     const gridSquares = [];
-    const maxGridPoints = 64 * 64; // Max points we can render to 512x512 canvas
     
     for (const square of grid.features) {
       const center = turf.center(square);
@@ -274,114 +268,58 @@ class GPUProcessor {
       }
       if (intersects) {
         gridSquares.push({ ...square, lon, lat });
-        if (gridSquares.length >= maxGridPoints) break;
       }
     }
 
     console.log(`GPU: Processing ${gridSquares.length} grid points`);
 
-    // If no grid points, return empty
-    if (gridSquares.length === 0) {
-      console.warn("GPU: No grid points to process");
-      return { type: "FeatureCollection", features: [] };
-    }
-
-    // Create position and coordinate buffers for grid points
-    const positions = new Float32Array(gridSquares.length * 2);
-    const coords = new Float32Array(gridSquares.length * 2);
-
-    for (let i = 0; i < gridSquares.length; i++) {
-      const square = gridSquares[i];
-      // Screen-space positions (-1 to 1)
-      const gridX = i % 64;
-      const gridY = Math.floor(i / 64);
-      positions[i * 2] = (gridX * 2 + 1) / 64 - 1;
-      positions[i * 2 + 1] = (gridY * 2 + 1) / 64 - 1;
-      // Geographic coordinates
-      coords[i * 2] = square.lon;
-      coords[i * 2 + 1] = square.lat;
-    }
-
-    // Set up buffers
-    const positionBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-
-    const coordBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, coordBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, coords, gl.STATIC_DRAW);
-
-    // Render to framebuffer
-    gl.useProgram(this.program);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
-    gl.viewport(0, 0, 512, 512);
-    gl.clearColor(0.0, 0.0, 0.0, 0.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
-    // Set up attributes
-    const positionLoc = gl.getAttribLocation(this.program, "position");
-    const coordLoc = gl.getAttribLocation(this.program, "gridCoord");
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.enableVertexAttribArray(positionLoc);
-    gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, coordBuffer);
-    gl.enableVertexAttribArray(coordLoc);
-    gl.vertexAttribPointer(coordLoc, 2, gl.FLOAT, false, 0, 0);
-
-    // Set uniforms
-    const bboxLoc = gl.getUniformLocation(this.program, "bbox");
-    const textureLoc = gl.getUniformLocation(this.program, "rasterTexture");
+    // Sample the GeoTIFF data directly
     const tiffBbox = geoTiffData.bbox;
-
-    gl.uniform4f(bboxLoc, tiffBbox[0], tiffBbox[1], tiffBbox[2], tiffBbox[3]);
-    gl.uniform1i(textureLoc, 0);
+    const width = geoTiffData.width;
+    const height = geoTiffData.height;
+    const rasterData = geoTiffData.rasterData;
     
-    // Bind raster texture
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.texture);
-
-    // Draw points (each point renders to one pixel)
-    gl.drawArrays(gl.POINTS, 0, gridSquares.length);
-
-    // Check for GL errors
-    const glError = gl.getError();
-    if (glError !== gl.NO_ERROR) {
-      console.warn("GL Error:", glError);
-    }
-
-    // Read pixel data
-    const pixel = new Uint8Array(4);
     const features = [];
 
-    for (let i = 0; i < gridSquares.length; i++) {
-      const gridX = i % 64;
-      const gridY = Math.floor(i / 64);
+    for (const square of gridSquares) {
+      const { lon, lat } = square;
       
-      gl.readPixels(gridX, gridY, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      // Convert geographic coordinates to raster indices
+      const xRatio = (lon - tiffBbox[0]) / (tiffBbox[2] - tiffBbox[0]);
+      const yRatio = (tiffBbox[3] - lat) / (tiffBbox[3] - tiffBbox[1]);
       
-      // Extract bloom day from R channel (0-255 represents 0-365)
-      const bloomDayNormalized = pixel[0] / 255.0;
-      const bloomDay = bloomDayNormalized * 365.0;
+      // Clamp to valid range
+      if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) {
+        continue;
+      }
       
-      // Skip invalid values (0 means no data)
+      const pixelX = Math.floor(xRatio * width);
+      const pixelY = Math.floor(yRatio * height);
+      
+      // Bounds check
+      if (pixelX < 0 || pixelX >= width || pixelY < 0 || pixelY >= height) {
+        continue;
+      }
+      
+      // Sample bloom day from raster
+      const idx = pixelY * width + pixelX;
+      const bloomDay = rasterData[idx];
+      
+      // Skip invalid values
       if (bloomDay < 1 || bloomDay > 365) {
         continue;
       }
-
+      
       const springDay = Math.max(50, Math.min(150, bloomDay));
       
       features.push({
-        ...gridSquares[i],
+        type: "Feature",
+        geometry: square.geometry,
         properties: { spring_day: springDay }
       });
     }
 
-    // Clean up buffers
-    gl.deleteBuffer(positionBuffer);
-    gl.deleteBuffer(coordBuffer);
-
+    console.log(`GPU: Sampled ${features.length} valid features`);
     return { type: "FeatureCollection", features };
   }
 
