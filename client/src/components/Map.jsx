@@ -10,7 +10,7 @@ const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
-  const [mapMode, setMapMode] = useState("gpu"); // "cpu" or "gpu" (raster mode temporarily disabled)
+  const [mapMode, setMapMode] = useState("cpu"); // Start with CPU while debugging GPU
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const gridCache = useRef(null);
@@ -159,16 +159,41 @@ const Map = ({ dayOfYear }) => {
         loadGeoTIFF("/SpringBloom_30yr.tif"),
         fetch("/us-states.json").then(res => res.json())
       ]).then(([tiffData, states]) => {
-        if (!tiffData) return;
+        if (!tiffData) {
+          console.error("Failed to load GeoTIFF");
+          return;
+        }
         
+        console.log("Data loaded successfully");
         geoTiffData.current = tiffData;
         statesGeoJSON.current = states;
         
         // Initialize CPU mode
-        gridCache.current = createFoliageGrid(states, tiffData);
+        const foliageGrid = createFoliageGrid(states, tiffData);
+        gridCache.current = foliageGrid;
         const source = map.current.getSource("foliage-cpu");
         if (source) {
-          source.setData(gridCache.current);
+          console.log("Setting CPU foliage data on map");
+          source.setData(foliageGrid);
+          
+          // Apply initial colors for CPU mode
+          if (mapMode === "cpu") {
+            console.log("Applying CPU mode colors");
+            map.current.setPaintProperty("foliage-layer-cpu", "fill-color", [
+              "interpolate", ["linear"], ["get", "spring_day"],
+              0, foliageColors.postBloom,
+              54 - 20, foliageColors.postBloom,
+              54 - 10, foliageColors.canopy,
+              54 - 3, foliageColors.peakBloom,
+              54, foliageColors.firstBloom,
+              54 + 5, foliageColors.firstLeaf,
+              54 + 10, foliageColors.budding,
+              54 + 15, foliageColors.none,
+              200, foliageColors.none,
+            ]);
+          }
+        } else {
+          console.warn("foliage-cpu source not found");
         }
         
         // Initialize GPU processor
@@ -178,10 +203,15 @@ const Map = ({ dayOfYear }) => {
           if (success) {
             gpu.loadGeoTIFFTexture(tiffData);
             gpuProcessor.current = gpu;
+            console.log("GPU processor initialized");
+          } else {
+            console.warn("GPU processor initialization failed");
           }
         })();
         
         setGeoTiffLoaded(true);
+      }).catch(err => {
+        console.error("Failed to load data:", err);
       });
     });
 
@@ -239,34 +269,65 @@ const Map = ({ dayOfYear }) => {
         setIsProcessing(true);
         (async () => {
           try {
+            console.log("GPU: Starting GPU processing...");
             const gpuResults = await gpuProcessor.current.processGridGPU(
               statesGeoJSON.current,
               geoTiffData.current,
               dayOfYear
             );
+            console.log(`GPU: Got ${gpuResults.features.length} features`);
             const source = map.current.getSource("foliage-gpu");
             if (source) {
               source.setData(gpuResults);
+              // Update colors
+              map.current.setPaintProperty("foliage-layer-gpu", "fill-color", [
+                "interpolate", ["linear"], ["get", "spring_day"],
+                0, foliageColors.postBloom,
+                dayOfYear - 20, foliageColors.postBloom,
+                dayOfYear - 10, foliageColors.canopy,
+                dayOfYear - 3, foliageColors.peakBloom,
+                dayOfYear, foliageColors.firstBloom,
+                dayOfYear + 5, foliageColors.firstLeaf,
+                dayOfYear + 10, foliageColors.budding,
+                dayOfYear + 15, foliageColors.none,
+                200, foliageColors.none,
+              ]);
             }
-            // Update colors with interpolation
-            map.current.setPaintProperty("foliage-layer-gpu", "fill-color", [
-              "interpolate", ["linear"], ["get", "spring_day"],
-              0, foliageColors.postBloom,
-              dayOfYear - 20, foliageColors.postBloom,
-              dayOfYear - 10, foliageColors.canopy,
-              dayOfYear - 3, foliageColors.peakBloom,
-              dayOfYear, foliageColors.firstBloom,
-              dayOfYear + 5, foliageColors.firstLeaf,
-              dayOfYear + 10, foliageColors.budding,
-              dayOfYear + 15, foliageColors.none,
-              200, foliageColors.none,
-            ]);
           } catch (e) {
             console.error("GPU processing failed:", e);
+            // Fallback to CPU mode
+            console.log("Falling back to CPU mode");
+            try {
+              const cpuResults = createFoliageGrid(statesGeoJSON.current, geoTiffData.current);
+              const source = map.current.getSource("foliage-gpu");
+              if (source) {
+                source.setData(cpuResults);
+                map.current.setPaintProperty("foliage-layer-gpu", "fill-color", [
+                  "interpolate", ["linear"], ["get", "spring_day"],
+                  0, foliageColors.postBloom,
+                  dayOfYear - 20, foliageColors.postBloom,
+                  dayOfYear - 10, foliageColors.canopy,
+                  dayOfYear - 3, foliageColors.peakBloom,
+                  dayOfYear, foliageColors.firstBloom,
+                  dayOfYear + 5, foliageColors.firstLeaf,
+                  dayOfYear + 10, foliageColors.budding,
+                  dayOfYear + 15, foliageColors.none,
+                  200, foliageColors.none,
+                ]);
+              }
+            } catch (fallbackError) {
+              console.error("Fallback CPU mode also failed:", fallbackError);
+            }
           } finally {
             setIsProcessing(false);
           }
         })();
+      } else {
+        console.warn("GPU mode not ready:", { 
+          hasTiff: !!geoTiffData.current, 
+          hasStates: !!statesGeoJSON.current, 
+          hasGPU: !!gpuProcessor.current 
+        });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -338,11 +399,15 @@ function createFoliageGrid(statesGeoJSON, geoTiffData) {
     if (!intersects) continue;
 
     const springDay = sampleGeoTIFFAtPoint(lon, lat, geoTiffData) || 90;
+    const clamped = Math.max(50, Math.min(150, springDay));
     filteredFeatures.push({
-      ...square,
-      properties: { spring_day: Math.max(50, Math.min(150, springDay)) }
+      type: "Feature",
+      geometry: square.geometry,
+      properties: { spring_day: clamped }
     });
   }
+  
+  console.log(`CPU: Generated ${filteredFeatures.length} foliage features`);
   return { type: "FeatureCollection", features: filteredFeatures };
 }
 

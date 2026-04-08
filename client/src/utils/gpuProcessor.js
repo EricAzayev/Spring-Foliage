@@ -243,6 +243,7 @@ class GPUProcessor {
    */
   async processGridGPU(statesGeoJSON, geoTiffData, currentDay) {
     if (!this.initialized || !this.texture) {
+      console.warn("GPU processor not ready:", { initialized: this.initialized, hasTexture: !!this.texture });
       throw new Error("GPU processor not initialized or texture not loaded");
     }
 
@@ -277,6 +278,14 @@ class GPUProcessor {
       }
     }
 
+    console.log(`GPU: Processing ${gridSquares.length} grid points`);
+
+    // If no grid points, return empty
+    if (gridSquares.length === 0) {
+      console.warn("GPU: No grid points to process");
+      return { type: "FeatureCollection", features: [] };
+    }
+
     // Create position and coordinate buffers for grid points
     const positions = new Float32Array(gridSquares.length * 2);
     const coords = new Float32Array(gridSquares.length * 2);
@@ -284,11 +293,10 @@ class GPUProcessor {
     for (let i = 0; i < gridSquares.length; i++) {
       const square = gridSquares[i];
       // Screen-space positions (-1 to 1)
-      // Map to grid: 64x64 grid on 512x512 canvas
       const gridX = i % 64;
       const gridY = Math.floor(i / 64);
-      positions[i * 2] = (gridX / 64) * 2 - 1;
-      positions[i * 2 + 1] = (gridY / 64) * 2 - 1;
+      positions[i * 2] = (gridX * 2 + 1) / 64 - 1;
+      positions[i * 2 + 1] = (gridY * 2 + 1) / 64 - 1;
       // Geographic coordinates
       coords[i * 2] = square.lon;
       coords[i * 2 + 1] = square.lat;
@@ -325,8 +333,9 @@ class GPUProcessor {
     // Set uniforms
     const bboxLoc = gl.getUniformLocation(this.program, "bbox");
     const textureLoc = gl.getUniformLocation(this.program, "rasterTexture");
+    const tiffBbox = geoTiffData.bbox;
 
-    gl.uniform4f(bboxLoc, bbox[0], bbox[1], bbox[2], bbox[3]);
+    gl.uniform4f(bboxLoc, tiffBbox[0], tiffBbox[1], tiffBbox[2], tiffBbox[3]);
     gl.uniform1i(textureLoc, 0);
     
     // Bind raster texture
@@ -335,6 +344,12 @@ class GPUProcessor {
 
     // Draw points (each point renders to one pixel)
     gl.drawArrays(gl.POINTS, 0, gridSquares.length);
+
+    // Check for GL errors
+    const glError = gl.getError();
+    if (glError !== gl.NO_ERROR) {
+      console.warn("GL Error:", glError);
+    }
 
     // Read pixel data
     const pixel = new Uint8Array(4);
