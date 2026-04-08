@@ -3,14 +3,31 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import * as turf from "@turf/turf";
 import * as GeoTIFF from "geotiff";
-import GPUProcessor from "../utils/gpuProcessor.js";
+import RasterTileProcessor from "../utils/rasterTileProcessor.js";
 import "./Map.css";
+
+// Helper functions for tile coordinate conversion (Web Mercator)
+const lngLatToTile = (lng, lat, zoom) => {
+  const n = Math.pow(2, zoom);
+  const x = Math.floor((lng + 180) / 360 * n);
+  const y = Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * n);
+  return { x, y, z: zoom };
+};
+
+const tileBounds = (tile) => {
+  const n = Math.pow(2, tile.z);
+  const west = (tile.x / n) * 360 - 180;
+  const east = ((tile.x + 1) / n) * 360 - 180;
+  const south = Math.atan(Math.sinh(-Math.PI * (2 * (tile.y + 1) / n - 1))) * 180 / Math.PI;
+  const north = Math.atan(Math.sinh(-Math.PI * (2 * tile.y / n - 1))) * 180 / Math.PI;
+  return { west, east, south, north };
+};
 
 const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
-  const [mapMode, setMapMode] = useState("gpu"); // GPU mode now working (samples raster directly)
+  const [mapMode, setMapMode] = useState("gpu");
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const gridCache = useRef(null);
@@ -26,6 +43,100 @@ const Map = ({ dayOfYear }) => {
     peakBloom: "#800080",
     canopy: "#ADFF2F",
     postBloom: "#006400",
+  };
+
+  // Helper function to render GPU tiles for current viewport
+  const updateGPUTiles = async (processor) => {
+    if (!processor || !map.current || mapMode !== "gpu") return;
+
+    try {
+      setIsProcessing(true);
+      
+      // Get current zoom and bounds
+      const zoom = Math.max(0, Math.min(15, Math.floor(map.current.getZoom())));
+      const bounds = map.current.getBounds();
+      
+      console.log(`Rendering GPU tiles at zoom ${zoom}`);
+      
+      // Calculate which tile(s) to render
+      // For simplicity, render the tile containing the map center
+      const centerLng = (bounds.getWest() + bounds.getEast()) / 2;
+      const centerLat = (bounds.getNorth() + bounds.getSouth()) / 2;
+      const centerTile = lngLatToTile(centerLng, centerLat, zoom);
+      
+      // Render the center tile
+      const canvas = await processor.generateTile(centerTile.z, centerTile.x, centerTile.y);
+      if (!canvas) {
+        console.warn("Failed to generate tile canvas");
+        return;
+      }
+      
+      // Convert canvas to blob URL (keep reference to prevent GC)
+      canvas.toBlob((blob) => {
+        const blobUrl = URL.createObjectURL(blob);
+        console.log(`✓ Created blob URL: ${blobUrl.substring(0, 50)}...`);
+        
+        // Get tile bounds in geographic coordinates
+        const bounds = tileBounds(centerTile);
+        // MapLibre expects coordinates in order: NW, NE, SE, SW
+        const coordinates = [
+          [bounds.west, bounds.north],   // NW
+          [bounds.east, bounds.north],   // NE
+          [bounds.east, bounds.south],   // SE
+          [bounds.west, bounds.south]    // SW
+        ];
+        
+        console.log(`✓ Tile bounds: w=${bounds.west.toFixed(2)}, e=${bounds.east.toFixed(2)}, n=${bounds.north.toFixed(2)}, s=${bounds.south.toFixed(2)}`);
+        console.log(`✓ Coordinates for MapLibre:`, coordinates);
+        
+        try {
+          // Remove existing layer/source
+          if (map.current.getLayer("foliage-layer-gpu")) {
+            map.current.removeLayer("foliage-layer-gpu");
+            console.log("✓ Removed existing foliage-layer-gpu layer");
+          }
+          if (map.current.getSource("foliage-gpu")) {
+            map.current.removeSource("foliage-gpu");
+            console.log("✓ Removed existing foliage-gpu source");
+          }
+          
+          // Add new source with the rendered tile
+          map.current.addSource("foliage-gpu", {
+            type: "image",
+            url: blobUrl,
+            coordinates: coordinates
+          });
+          console.log("✓ Added foliage-gpu source");
+          
+          // Add layer below state borders
+          map.current.addLayer({
+            id: "foliage-layer-gpu",
+            type: "raster",
+            source: "foliage-gpu",
+            paint: { "raster-opacity": 0.85 },
+            layout: { "visibility": "visible" }
+          }, "state-borders-top");
+          console.log("✓ Added foliage-layer-gpu layer (visible)");
+          
+          // Verify layer was added
+          const layer = map.current.getLayer("foliage-layer-gpu");
+          if (layer) {
+            console.log("✓ Layer verification: exists and is visible");
+          } else {
+            console.warn("✗ Layer verification: layer does not exist after adding!");
+          }
+          
+          console.log(`✓ GPU tile ready: z${centerTile.z}/${centerTile.x}/${centerTile.y} (256x256)`);
+        } catch (e) {
+          console.error("✗ Error adding tile to map:", e);
+        }
+      }, "image/png");
+      
+    } catch (e) {
+      console.error("GPU tile rendering failed:", e);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // Toggle between 2D and 3D view (currently disabled - terrain not available)
@@ -66,9 +177,17 @@ const Map = ({ dayOfYear }) => {
       }
     });
 
-    // Update zoom level on map move
+    // Re-render GPU tiles on map movement
     map.current.on("move", () => {
-      // Zoom level tracking can be added here if needed
+      if (mapMode === "gpu" && gpuProcessor.current && geoTiffLoaded) {
+        // Debounce tile updates during rapid pans
+        if (!map.current._tileUpdateTimeout) {
+          updateGPUTiles(gpuProcessor.current);
+          map.current._tileUpdateTimeout = setTimeout(() => {
+            map.current._tileUpdateTimeout = null;
+          }, 500);
+        }
+      }
     });
 
     map.current.on("load", () => {
@@ -127,24 +246,10 @@ const Map = ({ dayOfYear }) => {
         layout: { "visibility": mapMode === "cpu" ? "visible" : "none" }
       });
 
-      // 3. MODULE: GPU Mode (GeoJSON)
-      map.current.addSource("foliage-gpu", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-        generateId: true
-      });
-
-      map.current.addLayer({
-        id: "foliage-layer-gpu",
-        type: "fill",
-        source: "foliage-gpu",
-        paint: {
-          "fill-color": foliageColors.none,
-          "fill-opacity": 0.85,
-          "fill-antialias": false
-        },
-        layout: { "visibility": mapMode === "gpu" ? "visible" : "none" }
-      });
+      // GPU Mode (Raster Tiles via Image Source)
+      // This will be populated dynamically with rendered canvas tiles
+      // We create it lazily on first GPU tile render, not here
+      // (placeholder would cause rendering issues)
 
       // State borders on top
       map.current.addLayer({
@@ -196,16 +301,19 @@ const Map = ({ dayOfYear }) => {
           console.warn("foliage-cpu source not found");
         }
         
-        // Initialize GPU processor
+        // Initialize Raster Tile Processor instead of GeoJSON processor
         (async () => {
-          const gpu = new GPUProcessor();
-          const success = await gpu.init();
+          const processor = new RasterTileProcessor();
+          const success = await processor.init();
           if (success) {
-            gpu.loadGeoTIFFTexture(tiffData);
-            gpuProcessor.current = gpu;
-            console.log("GPU processor initialized");
+            processor.loadGeoTIFF(tiffData);
+            gpuProcessor.current = processor;
+            console.log("Raster tile processor initialized");
+            
+            // Render initial tiles for the current viewport
+            await updateGPUTiles(processor);
           } else {
-            console.warn("GPU processor initialization failed");
+            console.warn("Raster tile processor initialization failed");
           }
         })();
         
@@ -237,8 +345,8 @@ const Map = ({ dayOfYear }) => {
       if (map.current.getLayer("foliage-layer-gpu")) {
         map.current.setLayoutProperty("foliage-layer-gpu", "visibility", mapMode === "gpu" ? "visible" : "none");
       }
-    } catch {
-      // Layer visibility updates may fail if map is not ready
+    } catch (e) {
+      console.log("Layer visibility update error:", e);
     }
   }, [mapMode]);
 
@@ -264,57 +372,15 @@ const Map = ({ dayOfYear }) => {
         // CPU mode color update may fail if map is not ready
       }
     } else if (mapMode === "gpu") {
-      // Process on GPU - wait for data to load
-      if (!geoTiffLoaded) {
-        console.log("GPU mode waiting for data to load...");
+      // GPU mode: render tiles via WebGL
+      if (!geoTiffLoaded || !gpuProcessor.current) {
+        console.log("GPU mode waiting for data and processor initialization...");
         return;
       }
       
-      if (geoTiffData.current && statesGeoJSON.current && gpuProcessor.current) {
-        setIsProcessing(true);
-        (async () => {
-          try {
-            console.log("GPU: Starting GPU processing...");
-            const gpuResults = await gpuProcessor.current.processGridGPU(
-              statesGeoJSON.current,
-              geoTiffData.current,
-              dayOfYear
-            );
-            console.log(`GPU: Got ${gpuResults.features.length} features`);
-            
-            // Safety check - limit features to prevent MapLibre crashes
-            if (gpuResults.features.length > 50000) {
-              console.warn(`Too many features (${gpuResults.features.length}), downsampling...`);
-              // Keep every Nth feature to reduce count
-              const sampleRate = Math.ceil(gpuResults.features.length / 40000);
-              gpuResults.features = gpuResults.features.filter((_, i) => i % sampleRate === 0);
-              console.log(`Downsampled to ${gpuResults.features.length} features`);
-            }
-            
-            const source = map.current.getSource("foliage-gpu");
-            if (source) {
-              source.setData(gpuResults);
-              // Update colors
-              map.current.setPaintProperty("foliage-layer-gpu", "fill-color", [
-                "interpolate", ["linear"], ["get", "spring_day"],
-                0, foliageColors.postBloom,
-                dayOfYear - 20, foliageColors.postBloom,
-                dayOfYear - 10, foliageColors.canopy,
-                dayOfYear - 3, foliageColors.peakBloom,
-                dayOfYear, foliageColors.firstBloom,
-                dayOfYear + 5, foliageColors.firstLeaf,
-                dayOfYear + 10, foliageColors.budding,
-                dayOfYear + 15, foliageColors.none,
-                200, foliageColors.none,
-              ]);
-            }
-          } catch (e) {
-            console.error("GPU processing failed:", e);
-          } finally {
-            setIsProcessing(false);
-          }
-        })();
-      }
+      (async () => {
+        await updateGPUTiles(gpuProcessor.current);
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayOfYear, mapMode]);

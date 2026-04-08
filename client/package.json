@@ -13,6 +13,7 @@
     "@turf/turf": "^7.3.1",
     "geotiff": "^2.1.4-beta.1",
     "maplibre-gl": "^5.14.0",
+    "mercantile": "^3.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

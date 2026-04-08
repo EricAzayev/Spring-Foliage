@@ -246,7 +246,7 @@ class GPUProcessor {
     // Generate grid - increased cellSize to reduce feature count to ~10k
     // (3 miles creates 434k+ features which overwhelms MapLibre)
     const bbox = [-130, 24, -65, 50];
-    const cellSide = 15; // Using 15 miles instead of 3 to keep features under 50k
+    const cellSide = 3; // Using 15 miles instead of 3 to keep features under 50k
     const grid = turf.squareGrid(bbox, cellSide, { units: "miles" });
     const continentalStates = statesGeoJSON.features.filter(
       f => f.properties.name !== "Alaska" && f.properties.name !== "Hawaii"
