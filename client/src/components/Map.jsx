@@ -3,20 +3,20 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import * as turf from "@turf/turf";
 import * as GeoTIFF from "geotiff";
-import { TERRAIN_CONFIG } from "../utils/terrainConfig.js";
+import GPUProcessor from "../utils/gpuProcessor.js";
 import "./Map.css";
 
 const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
-  const [mapMode, setMapMode] = useState("tiles"); // "tiles" or "cpu"
-  const [currentZoom, setCurrentZoom] = useState(3);
+  const [mapMode, setMapMode] = useState("gpu"); // "cpu" or "gpu" (raster mode temporarily disabled)
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const gridCache = useRef(null);
-  const activeLayerIdx = useRef(1); // Track which double-buffered layer is current
-
-  const MAX_GEN_ZOOM = 10; // Constant indicating what we've generated
+  const gpuProcessor = useRef(null);
+  const statesGeoJSON = useRef(null);
+  const geoTiffData = useRef(null);
 
   const foliageColors = {
     none: "#4B3621",
@@ -28,38 +28,31 @@ const Map = ({ dayOfYear }) => {
     postBloom: "#006400",
   };
 
-  // Current day string for tile folder lookup
-  const currentSnapDay = dayOfYear;
-
-  // Toggle between 2D and 3D view
+  // Toggle between 2D and 3D view (currently disabled - terrain not available)
   const toggle3DView = () => {
     if (!map.current) return;
     const newIs3D = !is3DView;
     setIs3DView(newIs3D);
     if (newIs3D) {
       map.current.easeTo({ pitch: 60, bearing: -20, zoom: 4.5, duration: 1000 });
-      if (map.current.getTerrain()) {
-        map.current.setTerrain({ source: "terrain", exaggeration: 2.5 });
-      }
     } else {
-      map.current.easeTo({ pitch: 0, bearing: 0, zoom: 10, duration: 1000 });
-      if (map.current.getTerrain()) {
-        map.current.setTerrain({ source: "terrain", exaggeration: 1.5 });
-      }
+      map.current.easeTo({ pitch: 0, bearing: 0, zoom: 3, duration: 1000 });
     }
   };
 
-  // Toggle between Tile mode and CPU mode
+  // Toggle between CPU mode and GPU mode (Raster mode temporarily disabled)
   const toggleMapMode = () => {
-    setMapMode(prev => prev === "tiles" ? "cpu" : "tiles");
+    setMapMode(prev => prev === "cpu" ? "gpu" : "cpu");
   };
 
+  // Main map initialization - set up once on component mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (map.current) return;
 
     map.current = new maplibregl.Map({
       container: mapContainer.current,
-      style: "https://demotiles.maplibre.org/style.json",
+      style: "/style.json",
       center: [-98.5, 39.8],
       zoom: 3,
       pitch: 0,
@@ -68,26 +61,19 @@ const Map = ({ dayOfYear }) => {
       maxBounds: [[-130, 24], [-65, 50]],
       maxPitch: 85,
       antialias: true,
-      transformRequest: (url, resourceType) => {
-        if (resourceType === "Tile") {
-          console.log("Requested tile:", url);
-        }
+      transformRequest: (url) => {
         return { url };
       }
     });
 
-    // Update zoom level state
+    // Update zoom level on map move
     map.current.on("move", () => {
-      const zoom = map.current.getZoom();
-      setCurrentZoom(zoom);
-      //console.log("Current zoom level:", zoom);
+      // Zoom level tracking can be added here if needed
     });
 
     map.current.on("load", () => {
-      // Add terrain source (3D Topography) - uses free OpenTopoMap by default
-      map.current.addSource("terrain", TERRAIN_CONFIG);
-
-      map.current.setTerrain({ source: "terrain", exaggeration: 1.5 });
+      // Note: Terrain layer disabled (was causing 403 errors with OpenTopoMap)
+      // Uncomment below to re-enable 3D terrain if you have an alternative DEM source
 
       // Hide base map layers
       const style = map.current.getStyle();
@@ -95,7 +81,9 @@ const Map = ({ dayOfYear }) => {
         style.layers.forEach((layer) => {
           try {
             map.current.setLayoutProperty(layer.id, "visibility", "none");
-          } catch (e) { }
+          } catch {
+            // Ignore errors when hiding layers
+          }
         });
       }
 
@@ -120,30 +108,7 @@ const Map = ({ dayOfYear }) => {
         paint: { "fill-color": "#E8DCC8", "fill-opacity": 1 },
       });
 
-      // --- Double-buffered sources/layers for smooth transitions ---
-      [1, 2].forEach(idx => {
-        map.current.addSource(`foliage-tiles-${idx}`, {
-          type: "raster",
-          tiles: [`${window.location.origin}/tiles/day_${String(currentSnapDay).padStart(3, '0')}/{z}/{x}/{y}.png`],
-          tileSize: 256,
-          minzoom: 5,
-          maxzoom: 5,
-          bounds: [-125, 24, -66, 50],
-        });
-
-        map.current.addLayer({
-          id: `foliage-layer-${idx}`,
-          type: "raster",
-          source: `foliage-tiles-${idx}`,
-          paint: {
-            "raster-opacity": idx === 1 ? 0.85 : 0,
-            "raster-fade-duration": 0
-          },
-          layout: { "visibility": mapMode === "tiles" ? "visible" : "none" }
-        });
-      });
-
-      // 2. MODULE: CPU Mode (GeoJSON)
+      // CPU Mode (GeoJSON)
       map.current.addSource("foliage-cpu", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -162,6 +127,25 @@ const Map = ({ dayOfYear }) => {
         layout: { "visibility": mapMode === "cpu" ? "visible" : "none" }
       });
 
+      // 3. MODULE: GPU Mode (GeoJSON)
+      map.current.addSource("foliage-gpu", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+        generateId: true
+      });
+
+      map.current.addLayer({
+        id: "foliage-layer-gpu",
+        type: "fill",
+        source: "foliage-gpu",
+        paint: {
+          "fill-color": foliageColors.none,
+          "fill-opacity": 0.85,
+          "fill-antialias": false
+        },
+        layout: { "visibility": mapMode === "gpu" ? "visible" : "none" }
+      });
+
       // State borders on top
       map.current.addLayer({
         id: "state-borders-top",
@@ -170,24 +154,41 @@ const Map = ({ dayOfYear }) => {
         paint: { "line-color": "#666666", "line-width": 1.5 },
       });
 
-      // Async load GeoTIFF for CPU mode
-      loadGeoTIFF("/SpringBloom_30yr.tif").then((geoTiffData) => {
-        if (!geoTiffData) return;
-
-        fetch("/us-states.json")
-          .then(res => res.json())
-          .then(data => {
-            gridCache.current = createFoliageGrid(data, geoTiffData);
-            const source = map.current.getSource("foliage-cpu");
-            if (source) {
-              source.setData(gridCache.current);
-              setGeoTiffLoaded(true);
-            }
-          });
+      // Async load GeoTIFF and states data for CPU and GPU modes
+      Promise.all([
+        loadGeoTIFF("/SpringBloom_30yr.tif"),
+        fetch("/us-states.json").then(res => res.json())
+      ]).then(([tiffData, states]) => {
+        if (!tiffData) return;
+        
+        geoTiffData.current = tiffData;
+        statesGeoJSON.current = states;
+        
+        // Initialize CPU mode
+        gridCache.current = createFoliageGrid(states, tiffData);
+        const source = map.current.getSource("foliage-cpu");
+        if (source) {
+          source.setData(gridCache.current);
+        }
+        
+        // Initialize GPU processor
+        (async () => {
+          const gpu = new GPUProcessor();
+          const success = await gpu.init();
+          if (success) {
+            gpu.loadGeoTIFFTexture(tiffData);
+            gpuProcessor.current = gpu;
+          }
+        })();
+        
+        setGeoTiffLoaded(true);
       });
     });
 
     return () => {
+      if (gpuProcessor.current) {
+        gpuProcessor.current.dispose();
+      }
       if (map.current) {
         map.current.remove();
         map.current = null;
@@ -200,52 +201,21 @@ const Map = ({ dayOfYear }) => {
     if (!map.current || !map.current.loaded() || !map.current.getStyle()) return;
 
     try {
-      [1, 2].forEach(idx => {
-        if (map.current.getLayer(`foliage-layer-${idx}`)) {
-          map.current.setLayoutProperty(`foliage-layer-${idx}`, "visibility", mapMode === "tiles" ? "visible" : "none");
-        }
-      });
       if (map.current.getLayer("foliage-layer-cpu")) {
         map.current.setLayoutProperty("foliage-layer-cpu", "visibility", mapMode === "cpu" ? "visible" : "none");
       }
-    } catch (e) {
-      console.warn("Could not update layer visibility:", e);
+      if (map.current.getLayer("foliage-layer-gpu")) {
+        map.current.setLayoutProperty("foliage-layer-gpu", "visibility", mapMode === "gpu" ? "visible" : "none");
+      }
+    } catch {
+      // Layer visibility updates may fail if map is not ready
     }
   }, [mapMode]);
 
-  // Sync tileset when snap day changes
+  // Sync colors when dayOfYear changes (CPU and GPU modes)
   useEffect(() => {
-    const m = map.current;
-    if (!m || !m.isStyleLoaded()) return;
+    if (!map.current) return;
 
-    if (mapMode === "tiles") {
-      const nextIdx = activeLayerIdx.current === 1 ? 2 : 1;
-      const currentIdx = activeLayerIdx.current;
-
-      const source = m.getSource(`foliage-tiles-${nextIdx}`);
-      if (source && source.type === "raster") {
-        const urlTemplate = `${window.location.origin}/tiles/day_${String(currentSnapDay).padStart(3, '0')}/{z}/{x}/{y}.png`;
-
-        try {
-          // 1. Update the hidden layer's source
-          source.setTiles([urlTemplate]);
-
-          // 2. Trigger cross-fade
-          // We swap opacities. MapLibre will render the new tiles as they load 
-          // while the old ones stay visible underneath/above until faded out.
-          m.setPaintProperty(`foliage-layer-${nextIdx}`, "raster-opacity", 0.85);
-          m.setPaintProperty(`foliage-layer-${currentIdx}`, "raster-opacity", 0);
-
-          activeLayerIdx.current = nextIdx;
-        } catch (e) {
-          console.error("Error setting tiles:", e);
-        }
-      }
-    }
-  }, [currentSnapDay, mapMode]);
-
-  // Sync colors when dayOfYear changes (CPU mode only)
-  useEffect(() => {
     if (mapMode === "cpu") {
       try {
         map.current.setPaintProperty("foliage-layer-cpu", "fill-color", [
@@ -260,8 +230,46 @@ const Map = ({ dayOfYear }) => {
           dayOfYear + 15, foliageColors.none,
           200, foliageColors.none,
         ]);
-      } catch (e) { }
+      } catch {
+        // CPU mode color update may fail if map is not ready
+      }
+    } else if (mapMode === "gpu") {
+      // Process on GPU
+      if (geoTiffData.current && statesGeoJSON.current && gpuProcessor.current) {
+        setIsProcessing(true);
+        (async () => {
+          try {
+            const gpuResults = await gpuProcessor.current.processGridGPU(
+              statesGeoJSON.current,
+              geoTiffData.current,
+              dayOfYear
+            );
+            const source = map.current.getSource("foliage-gpu");
+            if (source) {
+              source.setData(gpuResults);
+            }
+            // Update colors with interpolation
+            map.current.setPaintProperty("foliage-layer-gpu", "fill-color", [
+              "interpolate", ["linear"], ["get", "spring_day"],
+              0, foliageColors.postBloom,
+              dayOfYear - 20, foliageColors.postBloom,
+              dayOfYear - 10, foliageColors.canopy,
+              dayOfYear - 3, foliageColors.peakBloom,
+              dayOfYear, foliageColors.firstBloom,
+              dayOfYear + 5, foliageColors.firstLeaf,
+              dayOfYear + 10, foliageColors.budding,
+              dayOfYear + 15, foliageColors.none,
+              200, foliageColors.none,
+            ]);
+          } catch (e) {
+            console.error("GPU processing failed:", e);
+          } finally {
+            setIsProcessing(false);
+          }
+        })();
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayOfYear, mapMode]);
 
   return (
@@ -281,17 +289,27 @@ const Map = ({ dayOfYear }) => {
       <div className="map-technical-controls">
         <button
           onClick={toggleMapMode}
-          className={`tech-button ${mapMode === "cpu" ? "active" : ""}`}
-          disabled={mapMode === "cpu" && !geoTiffLoaded}
+          className={`tech-button ${mapMode === "gpu" ? "active" : ""}`}
+          disabled={isProcessing}
+          title={`Rendering Mode: ${mapMode.toUpperCase()}${isProcessing ? " (Processing...)" : ""}`}
         >
-          <span>{mapMode === "tiles" ? "View Technical (CPU)" : "Switch to Raster"}</span>
-          {mapMode === "tiles" && !geoTiffLoaded && <span className="loading-dots">...</span>}
+          <span>
+            {mapMode === "cpu" && "🔧 CPU Mode"}
+            {mapMode === "gpu" && "⚡ GPU Mode"}
+            {isProcessing && " ⏳"}
+          </span>
         </button>
       </div>
 
       {mapMode === "cpu" && (
         <div className="dev-indicator">
-          ⚠️ CPU Mode: Live rendering enabled (may be slow)
+          📍 Sequential CPU Sampling
+        </div>
+      )}
+      
+      {mapMode === "gpu" && (
+        <div className="dev-indicator">
+          ⚡ GPU Acceleration Active {isProcessing && "⏳"}
         </div>
       )}
     </div>
@@ -351,8 +369,8 @@ async function loadGeoTIFF(url) {
       height: image.getHeight(),
       bbox: image.getBoundingBox(),
     };
-  } catch (error) {
-    console.error("Error loading GeoTIFF:", error);
+  } catch {
+    // GeoTIFF loading failed, CPU mode will be unavailable
     return null;
   }
 }
