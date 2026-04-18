@@ -34,7 +34,8 @@ const Map = ({ dayOfYear }) => {
   const gpuProcessor = useRef(null);
   const statesGeoJSON = useRef(null);
   const geoTiffData = useRef(null);
-  const activeTiles = useRef(new Set()); // Track rendered tiles
+  const activeTiles = useRef(new Set()); // Track rendered tile positions (z-x-y)
+  const renderGenRef = useRef(0);          // Generation counter to cancel stale renders
   const dayOfYearRef = useRef(dayOfYear);
   useEffect(() => { dayOfYearRef.current = dayOfYear; }, [dayOfYear]);
 
@@ -52,108 +53,88 @@ const Map = ({ dayOfYear }) => {
   const updateGPUTiles = async (processor, dayOfYear) => {
     if (!processor || !map.current || mapMode !== "gpu") return;
 
+    const gen = ++renderGenRef.current;
+
     try {
       setIsProcessing(true);
-      
-      // GPU mode uses fixed zoom level 4 (pixel size matches at all map zoom levels)
+
       const zoom = 4;
       const bounds = map.current.getBounds();
-      
-      console.log(`Rendering GPU tiles at fixed zoom ${zoom}`);
-      
-      // Calculate all tiles that intersect the current bounds
+      const maxTile = Math.pow(2, zoom) - 1;
       const nwTile = lngLatToTile(bounds.getWest(), bounds.getNorth(), zoom);
       const seTile = lngLatToTile(bounds.getEast(), bounds.getSouth(), zoom);
-      
-      // Clamp tile coordinates to valid range for this zoom level
-      const maxTile = Math.pow(2, zoom) - 1;
       const minX = Math.max(0, Math.min(nwTile.x, seTile.x));
       const maxX = Math.min(maxTile, Math.max(nwTile.x, seTile.x));
       const minY = Math.max(0, Math.min(nwTile.y, seTile.y));
       const maxY = Math.min(maxTile, Math.max(nwTile.y, seTile.y));
-      
-      const newTiles = new Set();
-      const tilesToRender = [];
-      
-      for (let x = minX; x <= maxX; x++) {
-        for (let y = minY; y <= maxY; y++) {
-          const tileKey = `${zoom}-${x}-${y}-${dayOfYear}`;
-          newTiles.add(tileKey);
-          
-          // Only render if not already active
-          if (!activeTiles.current.has(tileKey)) {
-            tilesToRender.push({ x, y, z: zoom });
-          }
-        }
-      }
-      
-      // Remove tiles that are no longer in view
-      for (const oldTileKey of activeTiles.current) {
-        if (!newTiles.has(oldTileKey)) {
-          const [z, x, y] = oldTileKey.split('-').map(Number);
-          const sourceId = `foliage-gpu-${z}-${x}-${y}`;
-          const layerId = `foliage-layer-${z}-${x}-${y}`;
-          
-          if (map.current.getLayer(layerId)) {
-            map.current.removeLayer(layerId);
-          }
-          if (map.current.getSource(sourceId)) {
-            map.current.removeSource(sourceId);
-          }
-          activeTiles.current.delete(oldTileKey);
-        }
-      }
-      
-      console.log(`Rendering ${tilesToRender.length} new tiles (${newTiles.size} total visible)`);
-      
-      // Render and add new tiles
-      for (const tile of tilesToRender) {
-        const canvas = await processor.generateTile(tile.z, tile.x, tile.y, dayOfYear);
+
+      const tileList = [];
+      for (let x = minX; x <= maxX; x++)
+        for (let y = minY; y <= maxY; y++)
+          tileList.push({ x, y, z: zoom });
+
+      // Generate all tiles in parallel (WebGL calls are synchronous — Promise.all batches results)
+      const canvases = await Promise.all(
+        tileList.map(tile => processor.generateTile(tile.z, tile.x, tile.y, dayOfYear))
+      );
+
+      // A newer render started while we were working — discard this result
+      if (gen !== renderGenRef.current) return;
+
+      const visiblePositions = new Set();
+
+      for (let i = 0; i < tileList.length; i++) {
+        const tile = tileList[i];
+        const canvas = canvases[i];
         if (!canvas) continue;
-        
-        const tileKey = `${tile.z}-${tile.x}-${tile.y}-${dayOfYear}`;
-        const sourceId = `foliage-gpu-${tileKey}`;
-        const layerId = `foliage-layer-${tileKey}`;
-        
-        // Convert canvas to blob URL
-        canvas.toBlob((blob) => {
-          const blobUrl = URL.createObjectURL(blob);
-          
-          // Get tile bounds
-          const tileBbox = tileBounds(tile);
+
+        const posKey = `${tile.z}-${tile.x}-${tile.y}`;
+        visiblePositions.add(posKey);
+        const sourceId = `foliage-gpu-${posKey}`;
+        const layerId  = `foliage-layer-${posKey}`;
+
+        // Synchronous data URL — no async callback, no ordering issues
+        const dataURL = canvas.toDataURL('image/png');
+
+        if (map.current.getSource(sourceId)) {
+          // Source already exists — swap image in-place, layer stays untouched
+          map.current.getSource(sourceId).updateImage({ url: dataURL });
+        } else {
+          const tBounds = tileBounds(tile);
           const coordinates = [
-            [tileBbox.west, tileBbox.north],   // NW
-            [tileBbox.east, tileBbox.north],   // NE
-            [tileBbox.east, tileBbox.south],   // SE
-            [tileBbox.west, tileBbox.south]    // SW
+            [tBounds.west, tBounds.north],
+            [tBounds.east, tBounds.north],
+            [tBounds.east, tBounds.south],
+            [tBounds.west, tBounds.south],
           ];
-          
           try {
-            // Add image source for this tile
-            if (!map.current.getSource(sourceId)) {
-              map.current.addSource(sourceId, {
-                type: "image",
-                url: blobUrl,
-                coordinates: coordinates
-              });
-              
-              // Add layer for this tile
-              map.current.addLayer({
-                id: layerId,
-                type: "raster",
-                source: sourceId,
-                paint: { "raster-opacity": 0.85 },
-                layout: { "visibility": "visible" }
-              }, "state-borders-top");
-              
-              activeTiles.current.add(tileKey);
-            }
+            map.current.addSource(sourceId, { type: 'image', url: dataURL, coordinates });
+            map.current.addLayer({
+              id: layerId, type: 'raster', source: sourceId,
+              paint: { 'raster-opacity': 0.85 },
+              layout: { visibility: 'visible' },
+            }, 'state-borders-top');
+            activeTiles.current.add(posKey);
           } catch (e) {
             console.error(`Error adding tile ${sourceId}:`, e);
           }
-        }, "image/png");
+        }
       }
-      
+
+      // Remove sources/layers for tiles that scrolled out of view
+      for (const posKey of activeTiles.current) {
+        if (!visiblePositions.has(posKey)) {
+          const sourceId = `foliage-gpu-${posKey}`;
+          const layerId  = `foliage-layer-${posKey}`;
+          if (map.current.getLayer(layerId))  map.current.removeLayer(layerId);
+          if (map.current.getSource(sourceId)) map.current.removeSource(sourceId);
+          activeTiles.current.delete(posKey);
+        }
+      }
+
+      // Kick off idle pre-render of adjacent days so future slider moves are instant
+      processor.prerenderRange(tileList, dayOfYear);
+
     } catch (e) {
       console.error("GPU tile rendering failed:", e);
     } finally {
@@ -364,8 +345,12 @@ const Map = ({ dayOfYear }) => {
       if (map.current.getLayer("foliage-layer-cpu")) {
         map.current.setLayoutProperty("foliage-layer-cpu", "visibility", mapMode === "cpu" ? "visible" : "none");
       }
-      if (map.current.getLayer("foliage-layer-gpu")) {
-        map.current.setLayoutProperty("foliage-layer-gpu", "visibility", mapMode === "gpu" ? "visible" : "none");
+      // GPU tiles are individually named — toggle visibility on all active tile layers
+      for (const posKey of activeTiles.current) {
+        const layerId = `foliage-layer-${posKey}`;
+        if (map.current.getLayer(layerId)) {
+          map.current.setLayoutProperty(layerId, "visibility", mapMode === "gpu" ? "visible" : "none");
+        }
       }
     } catch (e) {
       console.log("Layer visibility update error:", e);

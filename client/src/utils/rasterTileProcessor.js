@@ -114,7 +114,8 @@ class RasterTileProcessor {
     this.framebuffer = null;
     this.colorTexture = null;
     this.geoTiffData = null;
-    this.tileCache = new Map(); // Cache rendered tiles
+    this.tileCache = new Map();
+    this.uniforms = null;
     this.initialized = false;
   }
 
@@ -152,6 +153,15 @@ class RasterTileProcessor {
       }
 
       this.gl.useProgram(this.program);
+
+      // Cache uniform locations once — avoids getUniformLocation on every tile render
+      this.uniforms = {
+        rasterTexture: this.gl.getUniformLocation(this.program, 'rasterTexture'),
+        bbox:          this.gl.getUniformLocation(this.program, 'bbox'),
+        rasterSize:    this.gl.getUniformLocation(this.program, 'rasterSize'),
+        tileBbox:      this.gl.getUniformLocation(this.program, 'tileBbox'),
+        dayOfYear:     this.gl.getUniformLocation(this.program, 'dayOfYear'),
+      };
 
       // Set up framebuffer for tile rendering
       this.colorTexture = this.gl.createTexture();
@@ -324,50 +334,19 @@ class RasterTileProcessor {
       return this.tileCache.get(cacheKey);
     }
 
-    // Get tile bounding box in geographic coordinates
-    const bbox = tileBounds(x, y, z);
-    const tileBbox = [bbox.west, bbox.south, bbox.east, bbox.north];
+    const tBounds = tileBounds(x, y, z);
+    const tileBbox = [tBounds.west, tBounds.south, tBounds.east, tBounds.north];
+    const geoTiffBbox = this.geoTiffData.bbox;
 
-    console.log(`[GPU] Rendering tile z${z}/${x}/${y}: tileBbox=${JSON.stringify(tileBbox)}`);
-
-    // Render tile using WebGL
     this.gl.useProgram(this.program);
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.framebuffer);
-
-    // Bind GeoTIFF texture
     this.gl.activeTexture(this.gl.TEXTURE0);
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.geoTiffTexture);
-    this.gl.uniform1i(
-      this.gl.getUniformLocation(this.program, "rasterTexture"),
-      0
-    );
-
-    // Set uniforms
-    const bboxLoc = this.gl.getUniformLocation(this.program, "bbox");
-    const geoTiffBbox = this.geoTiffData.bbox;
-    console.log(`[GPU] Shader uniforms for z${z}/${x}/${y}:`);
-    console.log(`  GeoTIFF bbox: [W=${geoTiffBbox[0].toFixed(1)}, S=${geoTiffBbox[1].toFixed(1)}, E=${geoTiffBbox[2].toFixed(1)}, N=${geoTiffBbox[3].toFixed(1)}]`);
-    this.gl.uniform4f(
-      bboxLoc,
-      geoTiffBbox[0],
-      geoTiffBbox[1],
-      geoTiffBbox[2],
-      geoTiffBbox[3]
-    );
-
-    const rasterSizeLoc = this.gl.getUniformLocation(this.program, "rasterSize");
-    this.gl.uniform2f(
-      rasterSizeLoc,
-      this.geoTiffData.width,
-      this.geoTiffData.height
-    );
-
-    const tileBboxLoc = this.gl.getUniformLocation(this.program, "tileBbox");
-    console.log(`  Tile bbox:   [W=${tileBbox[0].toFixed(1)}, S=${tileBbox[1].toFixed(1)}, E=${tileBbox[2].toFixed(1)}, N=${tileBbox[3].toFixed(1)}]`);
-    this.gl.uniform4f(tileBboxLoc, tileBbox[0], tileBbox[1], tileBbox[2], tileBbox[3]);
-
-    const dayLoc = this.gl.getUniformLocation(this.program, "dayOfYear");
-    this.gl.uniform1f(dayLoc, dayOfYear);
+    this.gl.uniform1i(this.uniforms.rasterTexture, 0);
+    this.gl.uniform4f(this.uniforms.bbox, geoTiffBbox[0], geoTiffBbox[1], geoTiffBbox[2], geoTiffBbox[3]);
+    this.gl.uniform2f(this.uniforms.rasterSize, this.geoTiffData.width, this.geoTiffData.height);
+    this.gl.uniform4f(this.uniforms.tileBbox, tileBbox[0], tileBbox[1], tileBbox[2], tileBbox[3]);
+    this.gl.uniform1f(this.uniforms.dayOfYear, dayOfYear);
 
     // Clear and render
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
@@ -385,23 +364,7 @@ class RasterTileProcessor {
       pixels
     );
 
-    // Debug: check if pixels have any color data
-    let pixelCount = 0;
-    let transparentCount = 0;
-    for (let i = 0; i < pixels.length; i += 4) {
-      if (pixels[i + 3] > 0) pixelCount++; // Count non-transparent pixels
-      if (pixels[i + 3] === 0) transparentCount++;
-    }
-    console.log(`[GPU] Pixel stats: ${pixelCount} visible, ${transparentCount} transparent, out of ${TILE_SIZE * TILE_SIZE} total`);
-    if (pixelCount === 0) {
-      console.warn("[GPU] WARNING: All pixels are transparent! Check GeoTIFF data and shader.");
-    }
-
-    // Create result canvas
-    // NO Y-FLIP: readPixels is already in the right order for MapLibre image source
-    // MapLibre expects: row 0 = north (top), row 255 = south (bottom)
-    // readPixels gives: index 0 = bottom (south), index end = top (north)
-    // So we need to flip when copying to canvas
+    // Create result canvas — flip Y axis (WebGL bottom-up → canvas top-down)
     const resultCanvas = document.createElement("canvas");
     resultCanvas.width = TILE_SIZE;
     resultCanvas.height = TILE_SIZE;
@@ -426,6 +389,35 @@ class RasterTileProcessor {
     this.tileCache.set(cacheKey, resultCanvas);
 
     return resultCanvas;
+  }
+
+  /**
+   * Pre-render adjacent days in idle time so future slider positions are instant.
+   * @param {Array} tiles - list of {z,x,y} tile objects currently in view
+   * @param {number} centerDay - the day just rendered
+   * @param {number} radius - how many days ahead/behind to pre-render
+   */
+  prerenderRange(tiles, centerDay, radius = 7) {
+    const ric = window.requestIdleCallback
+      ? (cb) => window.requestIdleCallback(cb, { timeout: 200 })
+      : (cb) => setTimeout(() => cb({ timeRemaining: () => 50 }), 0);
+
+    let offset = 1;
+    const renderNext = (deadline) => {
+      while (offset <= radius && deadline.timeRemaining() > 2) {
+        for (const sign of [1, -1]) {
+          const day = centerDay + sign * offset;
+          if (day >= 53 && day <= 180) {
+            for (const tile of tiles) {
+              this.generateTile(tile.z, tile.x, tile.y, day);
+            }
+          }
+        }
+        offset++;
+      }
+      if (offset <= radius) ric(renderNext);
+    };
+    ric(renderNext);
   }
 
   /**
