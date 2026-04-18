@@ -27,7 +27,7 @@ const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
-  const [mapMode, setMapMode] = useState("cpu");
+  const [mapMode, setMapMode] = useState("gpu");
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const gridCache = useRef(null);

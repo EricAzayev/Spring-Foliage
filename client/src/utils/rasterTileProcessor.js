@@ -93,14 +93,16 @@ void main() {
   
   // Sample the GeoTIFF texture
   vec2 rasterCoord = vec2(xRatio, yRatio);
-  float bloomDayNormalized = texture2D(rasterTexture, rasterCoord).r;
-  float bloomDay = bloomDayNormalized * (180.0 - 54.0) + 54.0;
+  float encoded = texture2D(rasterTexture, rasterCoord).r * 255.0;
   
-  // Skip invalid/empty pixels (render as semi-transparent for debugging)
-  if (bloomDay < 54.0) {
-    gl_FragColor = vec4(0.8, 0.8, 0.8, 0.1);  // Light gray = no data
+  // 0 = no data (ocean, outside US, etc.) — render transparent
+  if (encoded < 1.0) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
     return;
   }
+  
+  // Decode back to bloom day (1-365)
+  float bloomDay = ((encoded - 1.0) / 254.0) * 365.0;
   
   // Map bloom day to color
   vec3 color = bloomDayToColor(bloomDay);
@@ -250,25 +252,17 @@ class RasterTileProcessor {
     }
     console.log(`[GPU] GeoTIFF loaded: ${width}x${height}, ${count} non-zero values, range [${minVal}, ${maxVal}]`);
 
-    // Normalize raster data to [0, 1] range (bloom day is 54-180)
-    const BLOOM_MIN = 54;
-    const BLOOM_MAX = 180;
-    const BLOOM_RANGE = BLOOM_MAX - BLOOM_MIN;
-    const normalized = new Uint8Array(width * height);
-    for (let i = 0; i < rasterData.length; i++) {
-      const val = Math.max(BLOOM_MIN, Math.min(BLOOM_MAX, rasterData[i]));
-      normalized[i] = Math.round(((val - BLOOM_MIN) / BLOOM_RANGE) * 255);
-    }
-
-    // Convert to RGBA format for WebGL 1.0 compatibility
-    // Store bloom day in R channel, replicate to G and B for grayscale
+    // Encode raw bloom day into texture: 0 = no data, 1-255 = day mapped across 1-365
+    // This preserves the ability to detect invalid/ocean pixels in the shader
     const rgbaData = new Uint8Array(width * height * 4);
-    for (let i = 0; i < normalized.length; i++) {
-      const val = normalized[i];
-      rgbaData[i * 4] = val;     // R = bloom day
-      rgbaData[i * 4 + 1] = val; // G = bloom day
-      rgbaData[i * 4 + 2] = val; // B = bloom day
-      rgbaData[i * 4 + 3] = 255; // A = opaque
+    for (let i = 0; i < rasterData.length; i++) {
+      const val = rasterData[i];
+      // Only encode valid bloom days (1-365); leave 0 for no-data (ocean, etc.)
+      const encoded = (val >= 1 && val <= 365) ? Math.round((val / 365.0) * 254) + 1 : 0;
+      rgbaData[i * 4]     = encoded; // R = encoded bloom day
+      rgbaData[i * 4 + 1] = encoded; // G
+      rgbaData[i * 4 + 2] = encoded; // B
+      rgbaData[i * 4 + 3] = 255;     // A = opaque
     }
 
     // Create texture with RGBA data
@@ -301,14 +295,14 @@ class RasterTileProcessor {
 
     console.log(`[GPU] Texture uploaded successfully (RGBA format), data length=${rgbaData.length} bytes`);
     
-    // Debug: sample a few pixels to verify conversion
+    // Debug: sample a few pixels to verify encoding
     const samplePixels = [0, Math.floor(width*height/2), width*height-1];
-    console.log("[GPU] Sample texture values (R channel = bloom day):");
+    console.log("[GPU] Sample texture values (R channel = encoded bloom day):");
     for (const idx of samplePixels) {
       const origVal = rasterData[idx];
-      const normVal = normalized[idx];
       const uploadedVal = rgbaData[idx * 4];
-      console.log(`  Pixel ${idx}: Original=${origVal}, Normalized=${normVal}, Uploaded=${uploadedVal}`);
+      const decoded = uploadedVal > 0 ? Math.round(((uploadedVal - 1) / 254.0) * 365) : 0;
+      console.log(`  Pixel ${idx}: Original=${origVal}, Encoded=${uploadedVal}, Decoded=${decoded}`);
     }
   }
 
