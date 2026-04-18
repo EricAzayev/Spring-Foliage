@@ -72,8 +72,13 @@ vec3 daysDiffToColor(float diff) {
 void main() {
   // Convert tile pixel coordinates to geographic coordinates
   float lon = tileBbox.x + vTexCoord.x * (tileBbox.z - tileBbox.x);
-  // FIX: vTexCoord.y goes 0 (bottom) to 1 (top), should map to south→north
-  float lat = tileBbox.y + vTexCoord.y * (tileBbox.w - tileBbox.y);
+  // Mercator-correct lat: tiles are evenly spaced in Mercator Y, not in degrees
+  // vTexCoord.y=0 is bottom (south), vTexCoord.y=1 is top (north) in WebGL clip space
+  const float PI = 3.14159265358979323846;
+  float mercSouth = log(tan(PI / 4.0 + tileBbox.y * PI / 360.0));
+  float mercNorth = log(tan(PI / 4.0 + tileBbox.w * PI / 360.0));
+  float mercY = mercSouth + vTexCoord.y * (mercNorth - mercSouth);
+  float lat = (2.0 * atan(exp(mercY)) - PI / 2.0) * (180.0 / PI);
   
   // Clamp to GeoTIFF bounds (handles edge cases)
   lon = clamp(lon, bbox.x, bbox.z);
