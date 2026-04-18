@@ -37,7 +37,11 @@ const Map = ({ dayOfYear }) => {
   const activeTiles = useRef(new Set()); // Track rendered tile positions (z-x-y)
   const renderGenRef = useRef(0);          // Generation counter to cancel stale renders
   const dayOfYearRef = useRef(dayOfYear);
+  const mapModeRef = useRef(mapMode);
+  const geoTiffLoadedRef = useRef(geoTiffLoaded);
   useEffect(() => { dayOfYearRef.current = dayOfYear; }, [dayOfYear]);
+  useEffect(() => { mapModeRef.current = mapMode; }, [mapMode]);
+  useEffect(() => { geoTiffLoadedRef.current = geoTiffLoaded; }, [geoTiffLoaded]);
 
   const foliageColors = {
     none: "#4B3621",
@@ -180,16 +184,10 @@ const Map = ({ dayOfYear }) => {
       }
     });
 
-    // Re-render GPU tiles on map movement
-    map.current.on("move", () => {
-      if (mapMode === "gpu" && gpuProcessor.current && geoTiffLoaded) {
-        // Debounce tile updates during rapid pans
-        if (!map.current._tileUpdateTimeout) {
-          updateGPUTiles(gpuProcessor.current, dayOfYearRef.current);
-          map.current._tileUpdateTimeout = setTimeout(() => {
-            map.current._tileUpdateTimeout = null;
-          }, 500);
-        }
+    // Re-render GPU tiles once the map settles (pan or zoom complete)
+    map.current.on("moveend", () => {
+      if (mapModeRef.current === "gpu" && gpuProcessor.current && geoTiffLoadedRef.current) {
+        updateGPUTiles(gpuProcessor.current, dayOfYearRef.current);
       }
     });
 
