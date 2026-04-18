@@ -35,6 +35,8 @@ const Map = ({ dayOfYear }) => {
   const statesGeoJSON = useRef(null);
   const geoTiffData = useRef(null);
   const activeTiles = useRef(new Set()); // Track rendered tiles
+  const dayOfYearRef = useRef(dayOfYear);
+  useEffect(() => { dayOfYearRef.current = dayOfYear; }, [dayOfYear]);
 
   const foliageColors = {
     none: "#4B3621",
@@ -47,7 +49,7 @@ const Map = ({ dayOfYear }) => {
   };
 
   // Helper function to render GPU tiles for current viewport
-  const updateGPUTiles = async (processor) => {
+  const updateGPUTiles = async (processor, dayOfYear) => {
     if (!processor || !map.current || mapMode !== "gpu") return;
 
     try {
@@ -75,7 +77,7 @@ const Map = ({ dayOfYear }) => {
       
       for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
-          const tileKey = `${zoom}-${x}-${y}`;
+          const tileKey = `${zoom}-${x}-${y}-${dayOfYear}`;
           newTiles.add(tileKey);
           
           // Only render if not already active
@@ -106,10 +108,10 @@ const Map = ({ dayOfYear }) => {
       
       // Render and add new tiles
       for (const tile of tilesToRender) {
-        const canvas = await processor.generateTile(tile.z, tile.x, tile.y);
+        const canvas = await processor.generateTile(tile.z, tile.x, tile.y, dayOfYear);
         if (!canvas) continue;
         
-        const tileKey = `${tile.z}-${tile.x}-${tile.y}`;
+        const tileKey = `${tile.z}-${tile.x}-${tile.y}-${dayOfYear}`;
         const sourceId = `foliage-gpu-${tileKey}`;
         const layerId = `foliage-layer-${tileKey}`;
         
@@ -202,7 +204,7 @@ const Map = ({ dayOfYear }) => {
       if (mapMode === "gpu" && gpuProcessor.current && geoTiffLoaded) {
         // Debounce tile updates during rapid pans
         if (!map.current._tileUpdateTimeout) {
-          updateGPUTiles(gpuProcessor.current);
+          updateGPUTiles(gpuProcessor.current, dayOfYearRef.current);
           map.current._tileUpdateTimeout = setTimeout(() => {
             map.current._tileUpdateTimeout = null;
           }, 500);
@@ -331,7 +333,7 @@ const Map = ({ dayOfYear }) => {
             console.log("Raster tile processor initialized");
             
             // Render initial tiles for the current viewport
-            await updateGPUTiles(processor);
+            await updateGPUTiles(processor, dayOfYear);
           } else {
             console.warn("Raster tile processor initialization failed");
           }
@@ -399,7 +401,7 @@ const Map = ({ dayOfYear }) => {
       }
       
       (async () => {
-        await updateGPUTiles(gpuProcessor.current);
+        await updateGPUTiles(gpuProcessor.current, dayOfYear);
       })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

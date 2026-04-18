@@ -37,41 +37,35 @@ uniform sampler2D rasterTexture;
 uniform vec4 bbox;              // [west, south, east, north] of GeoTIFF
 uniform vec2 rasterSize;        // [width, height] of GeoTIFF in pixels
 uniform vec4 tileBbox;          // [west, south, east, north] of tile
-uniform int zoomLevel;
+uniform float dayOfYear;        // Current day of year from slider
 
 varying vec2 vTexCoord;
 
-// Map pixel coordinates to foliage color based on bloom day
-vec3 bloomDayToColor(float bloomDay) {
-  // Color gradient for foliage phenology
-  vec3 postBloom = vec3(0.0, 100.0, 0.0) / 255.0;    // [0, 100, 0]
-  vec3 budding = vec3(166.0, 123.0, 91.0) / 255.0;   // [166, 123, 91]
-  vec3 firstLeaf = vec3(201.0, 217.0, 111.0) / 255.0; // [201, 217, 111]
-  vec3 firstBloom = vec3(218.0, 112.0, 214.0) / 255.0; // [218, 112, 214]
-  vec3 peakBloom = vec3(128.0, 0.0, 128.0) / 255.0;  // [128, 0, 128]
-  vec3 canopy = vec3(173.0, 255.0, 47.0) / 255.0;    // [173, 255, 47]
-  vec3 none = vec3(75.0, 54.0, 33.0) / 255.0;        // [75, 54, 33]
-  
-  if (bloomDay < 50.0) {
-    float t = bloomDay / 50.0;
-    return mix(none, budding, t);
-  } else if (bloomDay < 80.0) {
-    float t = (bloomDay - 50.0) / 30.0;
-    return mix(budding, firstLeaf, t);
-  } else if (bloomDay < 100.0) {
-    float t = (bloomDay - 80.0) / 20.0;
-    return mix(firstLeaf, firstBloom, t);
-  } else if (bloomDay < 120.0) {
-    float t = (bloomDay - 100.0) / 20.0;
-    return mix(firstBloom, peakBloom, t);
-  } else if (bloomDay < 140.0) {
-    float t = (bloomDay - 120.0) / 20.0;
-    return mix(peakBloom, canopy, t);
-  } else if (bloomDay < 160.0) {
-    float t = (bloomDay - 140.0) / 20.0;
-    return mix(canopy, postBloom, t);
-  } else {
+// Color based on days difference (current day - bloom day)
+// Matches CPU mode logic with smooth interpolation between stages
+vec3 daysDiffToColor(float diff) {
+  vec3 postBloom  = vec3(0.0,   100.0,  0.0)   / 255.0;
+  vec3 canopy     = vec3(173.0, 255.0,  47.0)  / 255.0;
+  vec3 peakBloom  = vec3(128.0, 0.0,    128.0) / 255.0;
+  vec3 firstBloom = vec3(218.0, 112.0,  214.0) / 255.0;
+  vec3 firstLeaf  = vec3(201.0, 217.0,  111.0) / 255.0;
+  vec3 budding    = vec3(166.0, 123.0,  91.0)  / 255.0;
+  vec3 none       = vec3(75.0,  54.0,   33.0)  / 255.0;
+
+  if (diff >= 20.0) {
     return postBloom;
+  } else if (diff >= 10.0) {
+    return mix(canopy, postBloom, (diff - 10.0) / 10.0);
+  } else if (diff >= 3.0) {
+    return mix(peakBloom, canopy, (diff - 3.0) / 7.0);
+  } else if (diff >= -5.0) {
+    return mix(firstBloom, peakBloom, (diff + 5.0) / 8.0);
+  } else if (diff >= -10.0) {
+    return mix(firstLeaf, firstBloom, (diff + 10.0) / 5.0);
+  } else if (diff >= -15.0) {
+    return mix(budding, firstLeaf, (diff + 15.0) / 5.0);
+  } else {
+    return mix(none, budding, clamp((diff + 25.0) / 10.0, 0.0, 1.0));
   }
 }
 
@@ -103,9 +97,10 @@ void main() {
   
   // Decode back to bloom day (1-365)
   float bloomDay = ((encoded - 1.0) / 254.0) * 365.0;
-  
-  // Map bloom day to color
-  vec3 color = bloomDayToColor(bloomDay);
+
+  // Compute days difference and color exactly like CPU mode
+  float diff = dayOfYear - bloomDay;
+  vec3 color = daysDiffToColor(diff);
   gl_FragColor = vec4(color, 1.0);
 }
 `;
@@ -313,14 +308,18 @@ class RasterTileProcessor {
    * @param {number} y - tile row
    * @returns {Promise<HTMLCanvasElement>}
    */
-  async generateTile(z, x, y) {
+  clearCache() {
+    this.tileCache.clear();
+  }
+
+  async generateTile(z, x, y, dayOfYear) {
     if (!this.initialized || !this.geoTiffData) {
       console.warn("Tile processor not ready");
       return null;
     }
 
-    // Check cache
-    const cacheKey = `${z}/${x}/${y}`;
+    // Cache key includes dayOfYear so different days render fresh
+    const cacheKey = `${z}/${x}/${y}/${dayOfYear}`;
     if (this.tileCache.has(cacheKey)) {
       return this.tileCache.get(cacheKey);
     }
@@ -367,8 +366,8 @@ class RasterTileProcessor {
     console.log(`  Tile bbox:   [W=${tileBbox[0].toFixed(1)}, S=${tileBbox[1].toFixed(1)}, E=${tileBbox[2].toFixed(1)}, N=${tileBbox[3].toFixed(1)}]`);
     this.gl.uniform4f(tileBboxLoc, tileBbox[0], tileBbox[1], tileBbox[2], tileBbox[3]);
 
-    const zoomLoc = this.gl.getUniformLocation(this.program, "zoomLevel");
-    this.gl.uniform1i(zoomLoc, z);
+    const dayLoc = this.gl.getUniformLocation(this.program, "dayOfYear");
+    this.gl.uniform1f(dayLoc, dayOfYear);
 
     // Clear and render
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
