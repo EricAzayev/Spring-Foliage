@@ -2,7 +2,7 @@
  * GPU-Accelerated Raster Tile Generator
  * 
  * Generates map tiles on-the-fly using WebGL to sample GeoTIFF data
- * and render them as colored raster images. Supports zoom levels 0-15.
+ * and render them as colored raster images. Uses zoom level 4 only.
  */
 
 const TILE_SIZE = 256; // Standard web tile size
@@ -78,28 +78,31 @@ vec3 bloomDayToColor(float bloomDay) {
 void main() {
   // Convert tile pixel coordinates to geographic coordinates
   float lon = tileBbox.x + vTexCoord.x * (tileBbox.z - tileBbox.x);
-  float lat = tileBbox.w - vTexCoord.y * (tileBbox.w - tileBbox.y);
+  // FIX: vTexCoord.y goes 0 (bottom) to 1 (top), should map to south→north
+  float lat = tileBbox.y + vTexCoord.y * (tileBbox.w - tileBbox.y);
   
-  // Convert geographic coordinates to GeoTIFF raster coordinates
+  // Clamp to GeoTIFF bounds (handles edge cases)
+  lon = clamp(lon, bbox.x, bbox.z);
+  lat = clamp(lat, bbox.y, bbox.w);
+  
+  // Convert geographic coordinates to raster texture coordinates [0, 1]
   float xRatio = (lon - bbox.x) / (bbox.z - bbox.x);
+  // GeoTIFF stored north-to-south: row 0 = north, row height-1 = south
+  // So north latitude should sample from v=0, south from v=1
   float yRatio = (bbox.w - lat) / (bbox.w - bbox.y);
   
-  // Check bounds
-  if (xRatio < 0.0 || xRatio > 1.0 || yRatio < 0.0 || yRatio > 1.0) {
-    discard;
-  }
-  
-  // Sample the GeoTIFF
+  // Sample the GeoTIFF texture
   vec2 rasterCoord = vec2(xRatio, yRatio);
   float bloomDayNormalized = texture2D(rasterTexture, rasterCoord).r;
-  float bloomDay = bloomDayNormalized * 365.0;
+  float bloomDay = bloomDayNormalized * (180.0 - 54.0) + 54.0;
   
-  // Skip invalid pixels
-  if (bloomDay < 1.0) {
-    discard;
+  // Skip invalid/empty pixels (render as semi-transparent for debugging)
+  if (bloomDay < 54.0) {
+    gl_FragColor = vec4(0.8, 0.8, 0.8, 0.1);  // Light gray = no data
+    return;
   }
   
-  // Map to color
+  // Map bloom day to color
   vec3 color = bloomDayToColor(bloomDay);
   gl_FragColor = vec4(color, 1.0);
 }
@@ -247,14 +250,28 @@ class RasterTileProcessor {
     }
     console.log(`[GPU] GeoTIFF loaded: ${width}x${height}, ${count} non-zero values, range [${minVal}, ${maxVal}]`);
 
-    // Normalize raster data to [0, 1] range
+    // Normalize raster data to [0, 1] range (bloom day is 54-180)
+    const BLOOM_MIN = 54;
+    const BLOOM_MAX = 180;
+    const BLOOM_RANGE = BLOOM_MAX - BLOOM_MIN;
     const normalized = new Uint8Array(width * height);
     for (let i = 0; i < rasterData.length; i++) {
-      const val = Math.max(0, Math.min(365, rasterData[i]));
-      normalized[i] = Math.round((val / 365) * 255);
+      const val = Math.max(BLOOM_MIN, Math.min(BLOOM_MAX, rasterData[i]));
+      normalized[i] = Math.round(((val - BLOOM_MIN) / BLOOM_RANGE) * 255);
     }
 
-    // Create texture
+    // Convert to RGBA format for WebGL 1.0 compatibility
+    // Store bloom day in R channel, replicate to G and B for grayscale
+    const rgbaData = new Uint8Array(width * height * 4);
+    for (let i = 0; i < normalized.length; i++) {
+      const val = normalized[i];
+      rgbaData[i * 4] = val;     // R = bloom day
+      rgbaData[i * 4 + 1] = val; // G = bloom day
+      rgbaData[i * 4 + 2] = val; // B = bloom day
+      rgbaData[i * 4 + 3] = 255; // A = opaque
+    }
+
+    // Create texture with RGBA data
     this.geoTiffTexture = this.gl.createTexture();
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.geoTiffTexture);
     this.gl.texParameteri(
@@ -277,12 +294,22 @@ class RasterTileProcessor {
       width,
       height,
       0,
-      this.gl.RED,
+      this.gl.RGBA,
       this.gl.UNSIGNED_BYTE,
-      normalized
+      rgbaData
     );
 
-    console.log(`[GPU] Texture uploaded successfully`);
+    console.log(`[GPU] Texture uploaded successfully (RGBA format), data length=${rgbaData.length} bytes`);
+    
+    // Debug: sample a few pixels to verify conversion
+    const samplePixels = [0, Math.floor(width*height/2), width*height-1];
+    console.log("[GPU] Sample texture values (R channel = bloom day):");
+    for (const idx of samplePixels) {
+      const origVal = rasterData[idx];
+      const normVal = normalized[idx];
+      const uploadedVal = rgbaData[idx * 4];
+      console.log(`  Pixel ${idx}: Original=${origVal}, Normalized=${normVal}, Uploaded=${uploadedVal}`);
+    }
   }
 
   /**
@@ -308,6 +335,8 @@ class RasterTileProcessor {
     const bbox = tileBounds(x, y, z);
     const tileBbox = [bbox.west, bbox.south, bbox.east, bbox.north];
 
+    console.log(`[GPU] Rendering tile z${z}/${x}/${y}: tileBbox=${JSON.stringify(tileBbox)}`);
+
     // Render tile using WebGL
     this.gl.useProgram(this.program);
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.framebuffer);
@@ -323,6 +352,8 @@ class RasterTileProcessor {
     // Set uniforms
     const bboxLoc = this.gl.getUniformLocation(this.program, "bbox");
     const geoTiffBbox = this.geoTiffData.bbox;
+    console.log(`[GPU] Shader uniforms for z${z}/${x}/${y}:`);
+    console.log(`  GeoTIFF bbox: [W=${geoTiffBbox[0].toFixed(1)}, S=${geoTiffBbox[1].toFixed(1)}, E=${geoTiffBbox[2].toFixed(1)}, N=${geoTiffBbox[3].toFixed(1)}]`);
     this.gl.uniform4f(
       bboxLoc,
       geoTiffBbox[0],
@@ -339,6 +370,7 @@ class RasterTileProcessor {
     );
 
     const tileBboxLoc = this.gl.getUniformLocation(this.program, "tileBbox");
+    console.log(`  Tile bbox:   [W=${tileBbox[0].toFixed(1)}, S=${tileBbox[1].toFixed(1)}, E=${tileBbox[2].toFixed(1)}, N=${tileBbox[3].toFixed(1)}]`);
     this.gl.uniform4f(tileBboxLoc, tileBbox[0], tileBbox[1], tileBbox[2], tileBbox[3]);
 
     const zoomLoc = this.gl.getUniformLocation(this.program, "zoomLevel");
@@ -373,13 +405,17 @@ class RasterTileProcessor {
     }
 
     // Create result canvas
+    // NO Y-FLIP: readPixels is already in the right order for MapLibre image source
+    // MapLibre expects: row 0 = north (top), row 255 = south (bottom)
+    // readPixels gives: index 0 = bottom (south), index end = top (north)
+    // So we need to flip when copying to canvas
     const resultCanvas = document.createElement("canvas");
     resultCanvas.width = TILE_SIZE;
     resultCanvas.height = TILE_SIZE;
     const ctx = resultCanvas.getContext("2d");
     const imageData = ctx.createImageData(TILE_SIZE, TILE_SIZE);
     
-    // Flip Y axis (WebGL is bottom-up, canvas is top-down)
+    // Flip Y axis: readPixels is bottom-up, canvas needs top-down
     for (let py = 0; py < TILE_SIZE; py++) {
       for (let px = 0; px < TILE_SIZE; px++) {
         const glIdx = (py * TILE_SIZE + px) * 4;

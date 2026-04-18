@@ -27,13 +27,14 @@ const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
-  const [mapMode, setMapMode] = useState("gpu");
+  const [mapMode, setMapMode] = useState("cpu");
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const gridCache = useRef(null);
   const gpuProcessor = useRef(null);
   const statesGeoJSON = useRef(null);
   const geoTiffData = useRef(null);
+  const activeTiles = useRef(new Set()); // Track rendered tiles
 
   const foliageColors = {
     none: "#4B3621",
@@ -52,85 +53,104 @@ const Map = ({ dayOfYear }) => {
     try {
       setIsProcessing(true);
       
-      // Get current zoom and bounds
-      const zoom = Math.max(0, Math.min(15, Math.floor(map.current.getZoom())));
+      // GPU mode uses fixed zoom level 4 (pixel size matches at all map zoom levels)
+      const zoom = 4;
       const bounds = map.current.getBounds();
       
-      console.log(`Rendering GPU tiles at zoom ${zoom}`);
+      console.log(`Rendering GPU tiles at fixed zoom ${zoom}`);
       
-      // Calculate which tile(s) to render
-      // For simplicity, render the tile containing the map center
-      const centerLng = (bounds.getWest() + bounds.getEast()) / 2;
-      const centerLat = (bounds.getNorth() + bounds.getSouth()) / 2;
-      const centerTile = lngLatToTile(centerLng, centerLat, zoom);
+      // Calculate all tiles that intersect the current bounds
+      const nwTile = lngLatToTile(bounds.getWest(), bounds.getNorth(), zoom);
+      const seTile = lngLatToTile(bounds.getEast(), bounds.getSouth(), zoom);
       
-      // Render the center tile
-      const canvas = await processor.generateTile(centerTile.z, centerTile.x, centerTile.y);
-      if (!canvas) {
-        console.warn("Failed to generate tile canvas");
-        return;
+      // Clamp tile coordinates to valid range for this zoom level
+      const maxTile = Math.pow(2, zoom) - 1;
+      const minX = Math.max(0, Math.min(nwTile.x, seTile.x));
+      const maxX = Math.min(maxTile, Math.max(nwTile.x, seTile.x));
+      const minY = Math.max(0, Math.min(nwTile.y, seTile.y));
+      const maxY = Math.min(maxTile, Math.max(nwTile.y, seTile.y));
+      
+      const newTiles = new Set();
+      const tilesToRender = [];
+      
+      for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) {
+          const tileKey = `${zoom}-${x}-${y}`;
+          newTiles.add(tileKey);
+          
+          // Only render if not already active
+          if (!activeTiles.current.has(tileKey)) {
+            tilesToRender.push({ x, y, z: zoom });
+          }
+        }
       }
       
-      // Convert canvas to blob URL (keep reference to prevent GC)
-      canvas.toBlob((blob) => {
-        const blobUrl = URL.createObjectURL(blob);
-        console.log(`✓ Created blob URL: ${blobUrl.substring(0, 50)}...`);
-        
-        // Get tile bounds in geographic coordinates
-        const bounds = tileBounds(centerTile);
-        // MapLibre expects coordinates in order: NW, NE, SE, SW
-        const coordinates = [
-          [bounds.west, bounds.north],   // NW
-          [bounds.east, bounds.north],   // NE
-          [bounds.east, bounds.south],   // SE
-          [bounds.west, bounds.south]    // SW
-        ];
-        
-        console.log(`✓ Tile bounds: w=${bounds.west.toFixed(2)}, e=${bounds.east.toFixed(2)}, n=${bounds.north.toFixed(2)}, s=${bounds.south.toFixed(2)}`);
-        console.log(`✓ Coordinates for MapLibre:`, coordinates);
-        
-        try {
-          // Remove existing layer/source
-          if (map.current.getLayer("foliage-layer-gpu")) {
-            map.current.removeLayer("foliage-layer-gpu");
-            console.log("✓ Removed existing foliage-layer-gpu layer");
+      // Remove tiles that are no longer in view
+      for (const oldTileKey of activeTiles.current) {
+        if (!newTiles.has(oldTileKey)) {
+          const [z, x, y] = oldTileKey.split('-').map(Number);
+          const sourceId = `foliage-gpu-${z}-${x}-${y}`;
+          const layerId = `foliage-layer-${z}-${x}-${y}`;
+          
+          if (map.current.getLayer(layerId)) {
+            map.current.removeLayer(layerId);
           }
-          if (map.current.getSource("foliage-gpu")) {
-            map.current.removeSource("foliage-gpu");
-            console.log("✓ Removed existing foliage-gpu source");
+          if (map.current.getSource(sourceId)) {
+            map.current.removeSource(sourceId);
           }
-          
-          // Add new source with the rendered tile
-          map.current.addSource("foliage-gpu", {
-            type: "image",
-            url: blobUrl,
-            coordinates: coordinates
-          });
-          console.log("✓ Added foliage-gpu source");
-          
-          // Add layer below state borders
-          map.current.addLayer({
-            id: "foliage-layer-gpu",
-            type: "raster",
-            source: "foliage-gpu",
-            paint: { "raster-opacity": 0.85 },
-            layout: { "visibility": "visible" }
-          }, "state-borders-top");
-          console.log("✓ Added foliage-layer-gpu layer (visible)");
-          
-          // Verify layer was added
-          const layer = map.current.getLayer("foliage-layer-gpu");
-          if (layer) {
-            console.log("✓ Layer verification: exists and is visible");
-          } else {
-            console.warn("✗ Layer verification: layer does not exist after adding!");
-          }
-          
-          console.log(`✓ GPU tile ready: z${centerTile.z}/${centerTile.x}/${centerTile.y} (256x256)`);
-        } catch (e) {
-          console.error("✗ Error adding tile to map:", e);
+          activeTiles.current.delete(oldTileKey);
         }
-      }, "image/png");
+      }
+      
+      console.log(`Rendering ${tilesToRender.length} new tiles (${newTiles.size} total visible)`);
+      
+      // Render and add new tiles
+      for (const tile of tilesToRender) {
+        const canvas = await processor.generateTile(tile.z, tile.x, tile.y);
+        if (!canvas) continue;
+        
+        const tileKey = `${tile.z}-${tile.x}-${tile.y}`;
+        const sourceId = `foliage-gpu-${tileKey}`;
+        const layerId = `foliage-layer-${tileKey}`;
+        
+        // Convert canvas to blob URL
+        canvas.toBlob((blob) => {
+          const blobUrl = URL.createObjectURL(blob);
+          
+          // Get tile bounds
+          const tileBbox = tileBounds(tile);
+          const coordinates = [
+            [tileBbox.west, tileBbox.north],   // NW
+            [tileBbox.east, tileBbox.north],   // NE
+            [tileBbox.east, tileBbox.south],   // SE
+            [tileBbox.west, tileBbox.south]    // SW
+          ];
+          
+          try {
+            // Add image source for this tile
+            if (!map.current.getSource(sourceId)) {
+              map.current.addSource(sourceId, {
+                type: "image",
+                url: blobUrl,
+                coordinates: coordinates
+              });
+              
+              // Add layer for this tile
+              map.current.addLayer({
+                id: layerId,
+                type: "raster",
+                source: sourceId,
+                paint: { "raster-opacity": 0.85 },
+                layout: { "visibility": "visible" }
+              }, "state-borders-top");
+              
+              activeTiles.current.add(tileKey);
+            }
+          } catch (e) {
+            console.error(`Error adding tile ${sourceId}:`, e);
+          }
+        }, "image/png");
+      }
       
     } catch (e) {
       console.error("GPU tile rendering failed:", e);
@@ -467,6 +487,7 @@ function sampleGeoTIFFAtPoint(lon, lat, geoTiffData) {
   const { rasterData, width, height, bbox } = geoTiffData;
   const [west, south, east, north] = bbox;
   const xRatio = (lon - west) / (east - west);
+  // GeoTIFF stored north-to-south: row 0 = north, row height-1 = south
   const yRatio = (north - lat) / (north - south);
   const px = Math.floor(xRatio * width);
   const py = Math.floor(yRatio * height);
@@ -480,14 +501,28 @@ async function loadGeoTIFF(url) {
     const tiff = await GeoTIFF.fromUrl(url);
     const image = await tiff.getImage();
     const rasterData = await image.readRasters();
+    
+    // Get bounding box - GeoTIFF.js returns [minX, minY, maxX, maxY] in geographic coords
+    // For WGS84: minX=west, minY=south, maxX=east, maxY=north
+    const bb = image.getBoundingBox();
+    const bbox = [bb[0], bb[1], bb[2], bb[3]];  // [west, south, east, north]
+    
+    console.log(`[GPU] GeoTIFF bounds: W=${bbox[0].toFixed(2)}, S=${bbox[1].toFixed(2)}, E=${bbox[2].toFixed(2)}, N=${bbox[3].toFixed(2)}`);
+    console.log(`[GPU] GeoTIFF metadata: ${image.getWidth()}x${image.getHeight()} pixels`);
+    
+    // Validate bbox makes geographic sense
+    if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) {
+      console.warn(`[GPU] WARNING: Invalid bbox detected! W>E or S>N - format may be unexpected!`);
+    }
+    
     return {
       rasterData: rasterData[0],
       width: image.getWidth(),
       height: image.getHeight(),
-      bbox: image.getBoundingBox(),
+      bbox: bbox,
     };
-  } catch {
-    // GeoTIFF loading failed, CPU mode will be unavailable
+  } catch (e) {
+    console.error("GeoTIFF loading failed:", e);
     return null;
   }
 }
