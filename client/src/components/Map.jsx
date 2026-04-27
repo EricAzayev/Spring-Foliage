@@ -59,7 +59,7 @@ const Map = ({ dayOfYear }) => {
 
   // Helper function to render GPU tiles for current viewport
   const updateGPUTiles = async (processor, dayOfYear) => {
-    if (!processor || !map.current || mapMode !== "gpu") return;
+    if (!processor || !map.current || mapModeRef.current !== "gpu") return;
 
     const gen = ++renderGenRef.current;
 
@@ -162,6 +162,49 @@ const Map = ({ dayOfYear }) => {
     }
   };
 
+  // Load GeoTIFF and initialize CPU grid + GPU processor (lazy — skipped for raster-only startup)
+  const loadGeoTIFFAndInitProcessors = async (states, currentDay) => {
+    if (geoTiffLoadedRef.current) return; // Guard against double-init
+
+    try {
+      const data = await loadGeoTIFF("/SpringBloom_30yr.tif");
+      if (!data) {
+        console.error("GeoTIFF failed to load — CPU/GPU modes unavailable");
+        return;
+      }
+
+      geoTiffData.current = data;
+
+      // Build CPU grid and hydrate the source
+      const grid = createFoliageGrid(states, data);
+      gridCache.current = grid;
+      if (map.current && map.current.getSource("foliage-cpu")) {
+        map.current.getSource("foliage-cpu").setData(grid);
+      }
+
+      // Init WebGL GPU processor
+      const processor = new RasterTileProcessor();
+      const ok = await processor.init();
+      if (ok) {
+        processor.loadGeoTIFF(data);
+        gpuProcessor.current = processor;
+      } else {
+        console.warn("GPU processor init failed — GPU mode unavailable");
+      }
+
+      setGeoTiffLoaded(true);
+
+      // Kick off first GPU render if already in GPU mode
+      if (mapModeRef.current === "gpu" && ok) {
+        updateGPUTiles(processor, currentDay);
+      }
+
+      console.log("GeoTIFF + processors ready");
+    } catch (e) {
+      console.error("loadGeoTIFFAndInitProcessors failed:", e);
+    }
+  };
+
   const rasterSlotRef = useRef(0); // alternates 0/1 for double-buffering
 
   // Update MapLibre raster tile source using double-buffering to avoid flash
@@ -188,6 +231,7 @@ const Map = ({ dayOfYear }) => {
       tileSize: 256,
       minzoom: 4,
       maxzoom: 4,
+      bounds: [-130, 24, -65, 50], // CONUS only — prevents requests for ocean/Canada tiles
     });
     map.current.addLayer({
       id: newLayerId,
@@ -335,68 +379,18 @@ const Map = ({ dayOfYear }) => {
         paint: { "line-color": "#666666", "line-width": 1.5 },
       });
 
-      // Async load GeoTIFF and states data for CPU and GPU modes
-      Promise.all([
-        loadGeoTIFF("/SpringBloom_30yr.tif"),
-        fetch("/us-states.json").then(res => res.json())
-      ]).then(([tiffData, states]) => {
-        if (!tiffData) {
-          console.error("Failed to load GeoTIFF");
-          return;
-        }
-        
-        console.log("Data loaded successfully");
-        geoTiffData.current = tiffData;
+      // If starting in raster mode, show tiles immediately — no GeoTIFF needed
+      if (mapModeRef.current === "raster") {
+        updateRasterTiles(dayOfYearRef.current);
+      }
+
+      // Load states (always needed for borders), then conditionally load GeoTIFF
+      fetch("/us-states.json").then(res => res.json()).then(states => {
         statesGeoJSON.current = states;
-        
-        // Initialize CPU mode
-        const foliageGrid = createFoliageGrid(states, tiffData);
-        gridCache.current = foliageGrid;
-        const source = map.current.getSource("foliage-cpu");
-        if (source) {
-          console.log("Setting CPU foliage data on map");
-          source.setData(foliageGrid);
-          
-          // Apply initial colors for CPU mode
-          if (mapMode === "cpu") {
-            console.log("Applying CPU mode colors");
-            map.current.setPaintProperty("foliage-layer-cpu", "fill-color", [
-              "interpolate", ["linear"], ["get", "spring_day"],
-              0, foliageColors.postBloom,
-              54 - 20, foliageColors.postBloom,
-              54 - 10, foliageColors.canopy,
-              54 - 3, foliageColors.peakBloom,
-              54, foliageColors.firstBloom,
-              54 + 5, foliageColors.firstLeaf,
-              54 + 10, foliageColors.budding,
-              54 + 15, foliageColors.none,
-              200, foliageColors.none,
-            ]);
-          }
-        } else {
-          console.warn("foliage-cpu source not found");
-        }
-        
-        // Initialize Raster Tile Processor instead of GeoJSON processor
-        (async () => {
-          const processor = new RasterTileProcessor();
-          const success = await processor.init();
-          if (success) {
-            processor.loadGeoTIFF(tiffData);
-            gpuProcessor.current = processor;
-            console.log("Raster tile processor initialized");
-            
-            // Render initial tiles for the current viewport
-            await updateGPUTiles(processor, dayOfYear);
-          } else {
-            console.warn("Raster tile processor initialization failed");
-          }
-        })();
-        
-        setGeoTiffLoaded(true);
-      }).catch(err => {
-        console.error("Failed to load data:", err);
-      });
+        // For CPU/GPU mode load GeoTIFF now; for raster mode load it in background
+        // so switching modes later is fast
+        loadGeoTIFFAndInitProcessors(states, dayOfYearRef.current);
+      }).catch(err => console.error("Failed to load states:", err));
     });
 
     return () => {
