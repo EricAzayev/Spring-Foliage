@@ -162,21 +162,27 @@ const Map = ({ dayOfYear }) => {
     }
   };
 
-  // Update MapLibre raster tile source for a given day
+  const rasterSlotRef = useRef(0); // alternates 0/1 for double-buffering
+
+  // Update MapLibre raster tile source using double-buffering to avoid flash
   const updateRasterTiles = (day) => {
     if (!map.current) return;
     const dayStr = String(day).padStart(3, '0');
     const tileUrl = `${SUPABASE_TILES_URL}/day_${dayStr}/{z}/{x}/{y}.png`;
-    const sourceId = "foliage-raster";
-    const layerId = "foliage-layer-raster";
 
-    if (map.current.getSource(sourceId)) {
-      // Remove and re-add to force tile refresh with new day
-      if (map.current.getLayer(layerId)) map.current.removeLayer(layerId);
-      map.current.removeSource(sourceId);
+    // Alternate between two slots so the old layer stays visible while the new one loads
+    const newSlot = rasterSlotRef.current === 0 ? 1 : 0;
+    const newSourceId = `foliage-raster-${newSlot}`;
+    const newLayerId  = `foliage-layer-raster-${newSlot}`;
+    const oldSourceId = `foliage-raster-${rasterSlotRef.current}`;
+    const oldLayerId  = `foliage-layer-raster-${rasterSlotRef.current}`;
+
+    // Add new source + layer (initially transparent)
+    if (map.current.getSource(newSourceId)) {
+      if (map.current.getLayer(newLayerId)) map.current.removeLayer(newLayerId);
+      map.current.removeSource(newSourceId);
     }
-
-    map.current.addSource(sourceId, {
+    map.current.addSource(newSourceId, {
       type: "raster",
       tiles: [tileUrl],
       tileSize: 256,
@@ -184,12 +190,31 @@ const Map = ({ dayOfYear }) => {
       maxzoom: 4,
     });
     map.current.addLayer({
-      id: layerId,
+      id: newLayerId,
       type: "raster",
-      source: sourceId,
-      paint: { "raster-opacity": 0.85 },
+      source: newSourceId,
+      paint: {
+        "raster-opacity": 0,
+        "raster-opacity-transition": { duration: 200, delay: 0 },
+      },
       layout: { visibility: "visible" },
     }, "state-borders-top");
+
+    rasterSlotRef.current = newSlot;
+
+    // Once the new tiles are loaded, fade in and remove the old layer
+    const onIdle = () => {
+      map.current.off("idle", onIdle);
+      if (!map.current.getLayer(newLayerId)) return;
+      // Fade in new layer
+      map.current.setPaintProperty(newLayerId, "raster-opacity", 0.85);
+      // Remove old layer after the fade (200ms matches transition)
+      setTimeout(() => {
+        if (map.current.getLayer(oldLayerId))  map.current.removeLayer(oldLayerId);
+        if (map.current.getSource(oldSourceId)) map.current.removeSource(oldSourceId);
+      }, 250);
+    };
+    map.current.on("idle", onIdle);
   };
 
   // Main map initialization - set up once on component mount
@@ -379,10 +404,13 @@ const Map = ({ dayOfYear }) => {
           map.current.setLayoutProperty(layerId, "visibility", mapMode === "gpu" ? "visible" : "none");
         }
       }
-      // Raster mode
-      if (map.current.getLayer("foliage-layer-raster")) {
-        map.current.setLayoutProperty("foliage-layer-raster", "visibility", mapMode === "raster" ? "visible" : "none");
-      }
+      // Raster mode — hide/show both possible slots
+      [0, 1].forEach(slot => {
+        const lid = `foliage-layer-raster-${slot}`;
+        if (map.current.getLayer(lid)) {
+          map.current.setLayoutProperty(lid, "visibility", mapMode === "raster" ? "visible" : "none");
+        }
+      });
       if (mapMode === "raster") {
         updateRasterTiles(dayOfYearRef.current);
       }
