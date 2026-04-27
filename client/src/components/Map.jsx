@@ -23,6 +23,8 @@ const tileBounds = (tile) => {
   return { west, east, south, north };
 };
 
+const SUPABASE_TILES_URL = "https://hsuqpowsxssezkbpkrwk.supabase.co/storage/v1/object/public/tiles";
+
 const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
@@ -30,6 +32,8 @@ const Map = ({ dayOfYear }) => {
   const [mapMode, setMapMode] = useState("gpu");
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const modeMenuTimeout = useRef(null);
   const gridCache = useRef(null);
   const gpuProcessor = useRef(null);
   const statesGeoJSON = useRef(null);
@@ -158,9 +162,34 @@ const Map = ({ dayOfYear }) => {
     }
   };
 
-  // Toggle between CPU mode and GPU mode (Raster mode temporarily disabled)
-  const toggleMapMode = () => {
-    setMapMode(prev => prev === "cpu" ? "gpu" : "cpu");
+  // Update MapLibre raster tile source for a given day
+  const updateRasterTiles = (day) => {
+    if (!map.current) return;
+    const dayStr = String(day).padStart(3, '0');
+    const tileUrl = `${SUPABASE_TILES_URL}/day_${dayStr}/{z}/{x}/{y}.png`;
+    const sourceId = "foliage-raster";
+    const layerId = "foliage-layer-raster";
+
+    if (map.current.getSource(sourceId)) {
+      // Remove and re-add to force tile refresh with new day
+      if (map.current.getLayer(layerId)) map.current.removeLayer(layerId);
+      map.current.removeSource(sourceId);
+    }
+
+    map.current.addSource(sourceId, {
+      type: "raster",
+      tiles: [tileUrl],
+      tileSize: 256,
+      minzoom: 4,
+      maxzoom: 4,
+    });
+    map.current.addLayer({
+      id: layerId,
+      type: "raster",
+      source: sourceId,
+      paint: { "raster-opacity": 0.85 },
+      layout: { visibility: "visible" },
+    }, "state-borders-top");
   };
 
   // Main map initialization - set up once on component mount
@@ -350,6 +379,13 @@ const Map = ({ dayOfYear }) => {
           map.current.setLayoutProperty(layerId, "visibility", mapMode === "gpu" ? "visible" : "none");
         }
       }
+      // Raster mode
+      if (map.current.getLayer("foliage-layer-raster")) {
+        map.current.setLayoutProperty("foliage-layer-raster", "visibility", mapMode === "raster" ? "visible" : "none");
+      }
+      if (mapMode === "raster") {
+        updateRasterTiles(dayOfYearRef.current);
+      }
     } catch (e) {
       console.log("Layer visibility update error:", e);
     }
@@ -386,6 +422,10 @@ const Map = ({ dayOfYear }) => {
       (async () => {
         await updateGPUTiles(gpuProcessor.current, dayOfYear);
       })();
+    } else if (mapMode === "raster") {
+      if (map.current && map.current.loaded()) {
+        updateRasterTiles(dayOfYear);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayOfYear, mapMode]);
@@ -404,32 +444,48 @@ const Map = ({ dayOfYear }) => {
         </button>
       </div>
 
-      <div className="map-technical-controls">
-        <button
-          onClick={toggleMapMode}
-          className={`tech-button ${mapMode === "gpu" ? "active" : ""}`}
-          disabled={isProcessing}
-          title={`Rendering Mode: ${mapMode.toUpperCase()}${isProcessing ? " (Processing...)" : ""}`}
-        >
-          <span>
-            {mapMode === "cpu" && "🔧 CPU Mode"}
-            {mapMode === "gpu" && "⚡ GPU Mode"}
-            {isProcessing && " ⏳"}
-          </span>
-        </button>
-      </div>
+      <div
+        className="mode-switcher"
+        onMouseEnter={() => {
+          clearTimeout(modeMenuTimeout.current);
+          setModeMenuOpen(true);
+        }}
+        onMouseLeave={() => {
+          modeMenuTimeout.current = setTimeout(() => setModeMenuOpen(false), 200);
+        }}
+      >
+        <div className="mode-switcher-label">
+          {mapMode === "cpu" && "🔧 CPU"}
+          {mapMode === "gpu" && "⚡ GPU"}
+          {mapMode === "raster" && "🗺️ Raster"}
+          {isProcessing && " ⏳"}
+        </div>
 
-      {mapMode === "cpu" && (
-        <div className="dev-indicator">
-          📍 Sequential CPU Sampling
-        </div>
-      )}
-      
-      {mapMode === "gpu" && (
-        <div className="dev-indicator">
-          ⚡ Vectorized GPU Sampling {isProcessing && "⏳"}
-        </div>
-      )}
+        {modeMenuOpen && (
+          <div className="mode-switcher-panel">
+            <div className="mode-panel-title">Render Mode</div>
+            {[
+              { id: "cpu",    icon: "🔧", label: "CPU Mode",    desc: "GeoJSON grid, client-side" },
+              { id: "gpu",    icon: "⚡", label: "GPU Mode",    desc: "WebGL tiles, client-side" },
+              { id: "raster", icon: "🗺️", label: "Raster Mode", desc: "Pre-rendered, from server" },
+            ].map(({ id, icon, label, desc }) => (
+              <button
+                key={id}
+                className={`mode-option ${mapMode === id ? "active" : ""}`}
+                onClick={() => { setMapMode(id); setModeMenuOpen(false); }}
+                disabled={isProcessing && id !== mapMode}
+              >
+                <span className="mode-option-icon">{icon}</span>
+                <span className="mode-option-text">
+                  <span className="mode-option-label">{label}</span>
+                  <span className="mode-option-desc">{desc}</span>
+                </span>
+                {mapMode === id && <span className="mode-option-check">✓</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
