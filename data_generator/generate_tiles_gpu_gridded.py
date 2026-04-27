@@ -6,7 +6,11 @@ Creates tiles with 3-mile grid cells just like CPU mode, so zooming reveals more
 """
 
 import os
+import io
 import math
+import requests
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 import numpy as np
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -21,9 +25,32 @@ from cupyx.scipy.ndimage import map_coordinates
 # Configuration
 GEOTIFF_PATH = "../client/public/SpringBloom_30yr.tif"
 OUTPUT_DIR = "../client/public/tiles"
-MIN_ZOOM = 5
-MAX_ZOOM = 5  
+MIN_ZOOM = 4
+MAX_ZOOM = 4  
 TILE_SIZE = 256
+
+# Supabase upload configuration
+# Set UPLOAD_TO_SUPABASE=True and provide credentials via environment variables:
+#   SUPABASE_URL=https://<project>.supabase.co
+#   SUPABASE_SERVICE_KEY=<service_role_key>
+#   SUPABASE_BUCKET=tiles  (optional, defaults to 'tiles')
+UPLOAD_TO_SUPABASE = True
+SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "tiles")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+def upload_tile_to_supabase(storage_path, png_bytes):
+    """Upload a tile PNG directly via Supabase Storage REST API."""
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{storage_path}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Content-Type": "image/png",
+        "x-upsert": "true",
+    }
+    resp = requests.post(url, headers=headers, data=png_bytes, timeout=30)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
 
 # Day range and interval
 DAY_START = 53
@@ -161,7 +188,7 @@ def render_tile_gpu_quantized(source_data_gpu, transform, src_width, src_height,
 
 
 def save_tile(tile_data, tile, day_dir):
-    """Save a tile to disk with debug labels."""
+    """Save a tile to disk (and optionally upload to Supabase)."""
     from PIL import ImageDraw, ImageFont
     zoom_dir = day_dir / str(tile.z)
     tile_dir = zoom_dir / str(tile.x)
@@ -182,7 +209,21 @@ def save_tile(tile_data, tile, day_dir):
         draw.rectangle([3, 3, 3 + (bbox[2]-bbox[0]) + 4, 3 + (bbox[3]-bbox[1]) + 4], fill=(255, 255, 255, 200))
         draw.text((5, 5), text, fill=(0, 0, 0, 255), font=font)
     
-    img.save(tile_path, "PNG", optimize=False)
+    # Write to bytes buffer (used for both disk and Supabase)
+    buf = io.BytesIO()
+    img.save(buf, "PNG", optimize=False)
+    png_bytes = buf.getvalue()
+
+    # Save to disk
+    tile_path.write_bytes(png_bytes)
+
+    # Upload to Supabase if enabled
+    if UPLOAD_TO_SUPABASE:
+        storage_path = f"{day_dir.name}/{tile.z}/{tile.x}/{tile.y}.png"
+        try:
+            upload_tile_to_supabase(storage_path, png_bytes)
+        except Exception as e:
+            print(f"❌ Supabase upload failed for {storage_path}: {e}")
 
 
 def generate_tiles_for_day_gpu(source_data_gpu, transform, src_width, src_height, day, output_base_dir):
@@ -211,6 +252,15 @@ def main():
     """Main GPU tile generation pipeline."""
     print("🌸 GPU-Accelerated Gridded Tile Generator")
     print("=" * 50)
+
+    if UPLOAD_TO_SUPABASE:
+        # Validate credentials early before spending time on generation
+        if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+            raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env")
+        print(f"☁️  Supabase upload enabled → bucket: '{SUPABASE_BUCKET}'")
+        print(f"    URL: {SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/")
+    else:
+        print("💾 Saving tiles to disk only (UPLOAD_TO_SUPABASE=False)")
     
     geotiff_path = Path(GEOTIFF_PATH)
     if not geotiff_path.exists():
