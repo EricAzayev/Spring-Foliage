@@ -29,7 +29,7 @@ const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
-  const [mapMode, setMapMode] = useState("gpu");
+  const [mapMode, setMapMode] = useState("raster");
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
@@ -231,7 +231,6 @@ const Map = ({ dayOfYear }) => {
       tileSize: 256,
       minzoom: 4,
       maxzoom: 4,
-      bounds: [-130, 24, -65, 50], // CONUS only — prevents requests for ocean/Canada tiles
     });
     map.current.addLayer({
       id: newLayerId,
@@ -384,12 +383,10 @@ const Map = ({ dayOfYear }) => {
         updateRasterTiles(dayOfYearRef.current);
       }
 
-      // Load states (always needed for borders), then conditionally load GeoTIFF
+      // Load states (always needed for borders)
       fetch("/us-states.json").then(res => res.json()).then(states => {
         statesGeoJSON.current = states;
-        // For CPU/GPU mode load GeoTIFF now; for raster mode load it in background
-        // so switching modes later is fast
-        loadGeoTIFFAndInitProcessors(states, dayOfYearRef.current);
+        // GeoTIFF is loaded lazily when the user switches to CPU or GPU mode
       }).catch(err => console.error("Failed to load states:", err));
     });
 
@@ -428,6 +425,8 @@ const Map = ({ dayOfYear }) => {
       });
       if (mapMode === "raster") {
         updateRasterTiles(dayOfYearRef.current);
+      } else if ((mapMode === "cpu" || mapMode === "gpu") && !geoTiffLoadedRef.current && statesGeoJSON.current) {
+        loadGeoTIFFAndInitProcessors(statesGeoJSON.current, dayOfYearRef.current);
       }
     } catch (e) {
       console.log("Layer visibility update error:", e);
