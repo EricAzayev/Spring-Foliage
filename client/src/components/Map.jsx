@@ -119,7 +119,7 @@ const Map = ({ dayOfYear }) => {
             map.current.addSource(sourceId, { type: 'image', url: dataURL, coordinates });
             map.current.addLayer({
               id: layerId, type: 'raster', source: sourceId,
-              paint: { 'raster-opacity': 0.85 },
+              paint: { 'raster-opacity': 0.65 },
               layout: { visibility: 'visible' },
             }, 'state-borders-top');
             activeTiles.current.add(posKey);
@@ -150,7 +150,7 @@ const Map = ({ dayOfYear }) => {
     }
   };
 
-  // Toggle between 2D and 3D view (currently disabled - terrain not available)
+  // Toggle between 2D and 3D view
   const toggle3DView = () => {
     if (!map.current) return;
     const newIs3D = !is3DView;
@@ -207,7 +207,7 @@ const Map = ({ dayOfYear }) => {
       map.current.off("idle", onIdle);
       if (!map.current.getLayer(newLayerId)) return;
       // Fade in new layer
-      map.current.setPaintProperty(newLayerId, "raster-opacity", 0.85);
+      map.current.setPaintProperty(newLayerId, "raster-opacity", 0.65);
       // Remove old layer after the fade (200ms matches transition)
       setTimeout(() => {
         if (map.current.getLayer(oldLayerId))  map.current.removeLayer(oldLayerId);
@@ -246,8 +246,15 @@ const Map = ({ dayOfYear }) => {
     });
 
     map.current.on("load", () => {
-      // Note: Terrain layer disabled (was causing 403 errors with OpenTopoMap)
-      // Uncomment below to re-enable 3D terrain if you have an alternative DEM source
+      // Terrain: AWS Terrarium elevation tiles (free, no key, SRTM 30m)
+      map.current.addSource("terrain-dem", {
+        type: "raster-dem",
+        tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+        tileSize: 256,
+        encoding: "terrarium",
+        maxzoom: 12,
+      });
+      map.current.setTerrain({ source: "terrain-dem", exaggeration: 2.0 });
 
       // Hide base map layers
       const style = map.current.getStyle();
@@ -282,6 +289,20 @@ const Map = ({ dayOfYear }) => {
         paint: { "fill-color": "#E8DCC8", "fill-opacity": 1 },
       });
 
+      // Hillshading — draws light/shadow on terrain so elevation reads through foliage
+      map.current.addLayer({
+        id: "hillshade",
+        type: "hillshade",
+        source: "terrain-dem",
+        paint: {
+          "hillshade-exaggeration": 0.6,
+          "hillshade-shadow-color": "#3a3a3a",
+          "hillshade-highlight-color": "#ffffff",
+          "hillshade-accent-color": "#5a4a3a",
+          "hillshade-illumination-direction": 335,
+        },
+      });
+
       // CPU Mode (GeoJSON)
       map.current.addSource("foliage-cpu", {
         type: "geojson",
@@ -295,7 +316,7 @@ const Map = ({ dayOfYear }) => {
         source: "foliage-cpu",
         paint: {
           "fill-color": foliageColors.none,
-          "fill-opacity": 0.85,
+          "fill-opacity": 0.65,
           "fill-antialias": false
         },
         layout: { "visibility": mapMode === "cpu" ? "visible" : "none" }
