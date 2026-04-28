@@ -12,3 +12,5 @@ data_generator/gpu_foliage/
 
 # Generated Assets
 client/public/tiles/
+.vercel
+.env*.local

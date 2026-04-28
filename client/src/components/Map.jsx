@@ -25,6 +25,10 @@ const tileBounds = (tile) => {
 
 const SUPABASE_TILES_URL = "https://hsuqpowsxssezkbpkrwk.supabase.co/storage/v1/object/public/tiles";
 
+const isMobile = /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+  typeof navigator !== "undefined" ? navigator.userAgent : ""
+);
+
 const Map = ({ dayOfYear }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
@@ -507,24 +511,27 @@ const Map = ({ dayOfYear }) => {
           <div className="mode-switcher-panel">
             <div className="mode-panel-title">Render Mode</div>
             {[
-              { id: "cpu",    icon: "🔧", label: "CPU Mode",    desc: "GeoJSON grid, client-side" },
-              { id: "gpu",    icon: "⚡", label: "GPU Mode",    desc: "WebGL tiles, client-side" },
+              { id: "cpu",    icon: "🔧", label: "CPU Mode",    desc: isMobile ? "Not available on mobile" : "GeoJSON grid, client-side" },
+              { id: "gpu",    icon: "⚡", label: "GPU Mode",    desc: isMobile ? "Not available on mobile" : "WebGL tiles, client-side" },
               { id: "raster", icon: "🗺️", label: "Raster Mode", desc: "Pre-rendered, from server" },
-            ].map(({ id, icon, label, desc }) => (
-              <button
-                key={id}
-                className={`mode-option ${mapMode === id ? "active" : ""}`}
-                onClick={() => { setMapMode(id); setModeMenuOpen(false); }}
-                disabled={isProcessing && id !== mapMode}
-              >
-                <span className="mode-option-icon">{icon}</span>
-                <span className="mode-option-text">
-                  <span className="mode-option-label">{label}</span>
-                  <span className="mode-option-desc">{desc}</span>
-                </span>
-                {mapMode === id && <span className="mode-option-check">✓</span>}
-              </button>
-            ))}
+            ].map(({ id, icon, label, desc }) => {
+              const mobileDisabled = isMobile && (id === "cpu" || id === "gpu");
+              return (
+                <button
+                  key={id}
+                  className={`mode-option ${mapMode === id ? "active" : ""}`}
+                  onClick={() => { if (!mobileDisabled) { setMapMode(id); setModeMenuOpen(false); } }}
+                  disabled={mobileDisabled || (isProcessing && id !== mapMode)}
+                >
+                  <span className="mode-option-icon">{icon}</span>
+                  <span className="mode-option-text">
+                    <span className="mode-option-label">{label}</span>
+                    <span className="mode-option-desc">{desc}</span>
+                  </span>
+                  {mapMode === id && <span className="mode-option-check">✓</span>}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
