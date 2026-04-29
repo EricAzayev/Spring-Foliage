@@ -1,9 +1,58 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Map from "./components/Map";
 import "./App.css";
+import { supabase } from "./utils/supabase";
+
+const tracked = { fired: false };
 
 function App() {
   const [currentDate, setCurrentDate] = useState(new Date(2025, 1, 23)); // February 23, 2025
+  const visitStart = useRef(Date.now());
+
+  useEffect(() => {
+    // StrictMode mounts twice in dev — only track once per actual page load
+    if (tracked.fired) return;
+    tracked.fired = true;
+
+    const rowId = { current: null };
+
+    // Step 1: INSERT a view row on mount, save the returned id
+    supabase
+      .from("Views")
+      .insert({ project: "Spring Foliage Map", page: "Home", views: 1 })
+      .select("id")
+      .single()
+      .then(({ data, error }) => {
+        if (error) { console.error("View tracking error:", error.message); return; }
+        rowId.current = data.id;
+      });
+
+    // Step 2: PATCH time_on_page when the user leaves
+    // fetch with keepalive:true completes even as the page unloads
+    const handleUnload = () => {
+      if (!rowId.current) return;
+      const seconds = Math.round((Date.now() - visitStart.current) / 1000);
+      const baseUrl = (import.meta.env.VITE_SUPABASE_URL || "")
+        .replace(/\/rest\/v1\/?$/, "")
+        .replace(/\/$/, "");
+      fetch(
+        `${baseUrl}/rest/v1/Views?id=eq.${rowId.current}`,
+        {
+          method: "PATCH",
+          keepalive: true,
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ time_on_page: seconds }),
+        }
+      );
+    };
+
+    window.addEventListener("beforeunload", handleUnload);
+    return () => window.removeEventListener("beforeunload", handleUnload);
+  }, []);
   const [dayOfYear, setDayOfYear] = useState(54); // Day 54 = February 23
 
   const colorLegend = [
