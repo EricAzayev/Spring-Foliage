@@ -3,23 +3,24 @@ import Map from "./components/Map";
 import "./App.css";
 import { supabase } from "./utils/supabase";
 
-const tracked = { fired: false };
+// Unique ID for this page load — shared across StrictMode remounts (module runs once per load)
+const VISIT_ID = crypto.randomUUID();
 
 function App() {
   const [currentDate, setCurrentDate] = useState(new Date(2025, 1, 23)); // February 23, 2025
   const visitStart = useRef(Date.now());
 
   useEffect(() => {
-    // StrictMode mounts twice in dev — only track once per actual page load
-    if (tracked.fired) return;
-    tracked.fired = true;
+    // Guard against StrictMode's double-mount firing two inserts
+    if (sessionStorage.getItem(VISIT_ID)) return;
+    sessionStorage.setItem(VISIT_ID, "1");
 
     const rowId = { current: null };
 
-    // Step 1: INSERT a view row on mount, save the returned id
+    // Step 1: INSERT a view row on mount — visit_id ensures DB-level deduplication on retries
     supabase
       .from("Views")
-      .insert({ project: "Spring Foliage Map", page: "Home", views: 1 })
+      .insert({ project: "Spring Foliage Map", page: "Home", views: 1, visit_id: VISIT_ID })
       .select("id")
       .single()
       .then(({ data, error }) => {
