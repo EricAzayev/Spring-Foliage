@@ -128,7 +128,7 @@ const Map = ({ dayOfYear }) => {
             }, 'state-borders-top');
             activeTiles.current.add(posKey);
           } catch (e) {
-            console.error(`Error adding tile ${sourceId}:`, e);
+            // Error adding tile
           }
         }
       }
@@ -148,7 +148,7 @@ const Map = ({ dayOfYear }) => {
       processor.prerenderRange(tileList, dayOfYear);
 
     } catch (e) {
-      console.error("GPU tile rendering failed:", e);
+      // GPU tile rendering failed
     } finally {
       setIsProcessing(false);
     }
@@ -173,7 +173,7 @@ const Map = ({ dayOfYear }) => {
     try {
       const data = await loadGeoTIFF("/SpringBloom_30yr.tif");
       if (!data) {
-        console.error("GeoTIFF failed to load — CPU/GPU modes unavailable");
+        // GeoTIFF failed to load — CPU/GPU modes unavailable
         return;
       }
 
@@ -193,7 +193,7 @@ const Map = ({ dayOfYear }) => {
         processor.loadGeoTIFF(data);
         gpuProcessor.current = processor;
       } else {
-        console.warn("GPU processor init failed — GPU mode unavailable");
+        // GPU processor init failed — GPU mode unavailable
       }
 
       setGeoTiffLoaded(true);
@@ -203,9 +203,9 @@ const Map = ({ dayOfYear }) => {
         updateGPUTiles(processor, currentDay);
       }
 
-      console.log("GeoTIFF + processors ready");
+      // GeoTIFF + processors ready
     } catch (e) {
-      console.error("loadGeoTIFFAndInitProcessors failed:", e);
+      // loadGeoTIFFAndInitProcessors failed
     }
   };
 
@@ -391,7 +391,7 @@ const Map = ({ dayOfYear }) => {
       fetch("/us-states.json").then(res => res.json()).then(states => {
         statesGeoJSON.current = states;
         // GeoTIFF is loaded lazily when the user switches to CPU or GPU mode
-      }).catch(err => console.error("Failed to load states:", err));
+      }).catch(err => {/* Failed to load states */});
     });
 
     return () => {
@@ -433,7 +433,7 @@ const Map = ({ dayOfYear }) => {
         loadGeoTIFFAndInitProcessors(statesGeoJSON.current, dayOfYearRef.current);
       }
     } catch (e) {
-      console.log("Layer visibility update error:", e);
+      // Layer visibility update error
     }
   }, [mapMode]);
 
@@ -461,7 +461,7 @@ const Map = ({ dayOfYear }) => {
     } else if (mapMode === "gpu") {
       // GPU mode: render tiles via WebGL
       if (!geoTiffLoaded || !gpuProcessor.current) {
-        console.log("GPU mode waiting for data and processor initialization...");
+        // GPU mode waiting for data and processor initialization...
         return;
       }
       
@@ -569,7 +569,7 @@ function createFoliageGrid(statesGeoJSON, geoTiffData) {
     });
   }
   
-  console.log(`CPU: Generated ${filteredFeatures.length} foliage features`);
+  // CPU: Generated foliage features
   return { type: "FeatureCollection", features: filteredFeatures };
 }
 
@@ -597,12 +597,12 @@ async function loadGeoTIFF(url) {
     const bb = image.getBoundingBox();
     const bbox = [bb[0], bb[1], bb[2], bb[3]];  // [west, south, east, north]
     
-    console.log(`[GPU] GeoTIFF bounds: W=${bbox[0].toFixed(2)}, S=${bbox[1].toFixed(2)}, E=${bbox[2].toFixed(2)}, N=${bbox[3].toFixed(2)}`);
-    console.log(`[GPU] GeoTIFF metadata: ${image.getWidth()}x${image.getHeight()} pixels`);
+    // [GPU] GeoTIFF bounds
+    // [GPU] GeoTIFF metadata
     
     // Validate bbox makes geographic sense
     if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) {
-      console.warn(`[GPU] WARNING: Invalid bbox detected! W>E or S>N - format may be unexpected!`);
+      // [GPU] WARNING: Invalid bbox detected! W>E or S>N - format may be unexpected!
     }
     
     return {
@@ -612,7 +612,7 @@ async function loadGeoTIFF(url) {
       bbox: bbox,
     };
   } catch (e) {
-    console.error("GeoTIFF loading failed:", e);
+    // GeoTIFF loading failed
     return null;
   }
 }

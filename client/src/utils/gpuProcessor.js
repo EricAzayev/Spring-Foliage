@@ -91,7 +91,7 @@ class GPUProcessor {
       
       this.gl = this.canvas.getContext("webgl");
       if (!this.gl) {
-        console.warn("WebGL not supported, GPU mode unavailable");
+        // WebGL not supported, GPU mode unavailable
         return false;
       }
 
@@ -100,7 +100,7 @@ class GPUProcessor {
       const fragmentShader = this.compileShader(this.gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
       
       if (!vertexShader || !fragmentShader) {
-        console.warn("Shader compilation failed");
+        // Shader compilation failed
         return false;
       }
 
@@ -111,7 +111,7 @@ class GPUProcessor {
       this.gl.linkProgram(this.program);
 
       if (!this.gl.getProgramParameter(this.program, this.gl.LINK_STATUS)) {
-        console.error("Program linking failed:", this.gl.getProgramInfoLog(this.program));
+        // Program linking failed
         return false;
       }
 
@@ -144,14 +144,14 @@ class GPUProcessor {
 
       const status = this.gl.checkFramebufferStatus(this.gl.FRAMEBUFFER);
       if (status !== this.gl.FRAMEBUFFER_COMPLETE) {
-        console.warn("Framebuffer incomplete:", status);
+        // Framebuffer incomplete
         return false;
       }
 
       this.initialized = true;
       return true;
     } catch (e) {
-      console.warn("GPU initialization failed:", e);
+      // GPU initialization failed
       return false;
     }
   }
@@ -165,7 +165,7 @@ class GPUProcessor {
     this.gl.compileShader(shader);
 
     if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-      console.error(`Shader compilation error:`, this.gl.getShaderInfoLog(shader));
+      // Shader compilation error
       return null;
     }
     return shader;
@@ -179,7 +179,7 @@ class GPUProcessor {
 
     // Validate dimensions
     if (rasterData.length !== width * height) {
-      console.warn(`GeoTIFF size mismatch: expected ${width * height}, got ${rasterData.length}`);
+      // GeoTIFF size mismatch
       return;
     }
 
@@ -212,7 +212,7 @@ class GPUProcessor {
         normalizedData
       );
     } catch (e) {
-      console.warn("WebGL texture upload failed:", e);
+      // WebGL texture upload failed
       // Fallback: use RGBA format
       const rgbaData = new Uint8Array(width * height * 4);
       for (let i = 0; i < width * height; i++) {
@@ -271,7 +271,7 @@ class GPUProcessor {
       }
     }
 
-    console.log(`GPU: Processing ${gridSquares.length} grid points`);
+    // GPU: Processing grid points
 
     // Sample the GeoTIFF data directly
     const tiffBbox = geoTiffData.bbox;
@@ -319,7 +319,7 @@ class GPUProcessor {
       });
     }
 
-    console.log(`GPU: Sampled ${features.length} valid features`);
+    // GPU: Sampled valid features
     return { type: "FeatureCollection", features };
   }
 

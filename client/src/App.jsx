@@ -3,17 +3,19 @@ import Map from "./components/Map";
 import "./App.css";
 import { supabase } from "./utils/supabase";
 
-// Unique ID for this page load — shared across StrictMode remounts (module runs once per load)
+// Unique ID for this page load — used as the DB visit_id
 const VISIT_ID = crypto.randomUUID();
+// Fixed key — same across all module instances in this session
+const SESSION_GUARD = "sfm_view_tracked";
 
 function App() {
   const [currentDate, setCurrentDate] = useState(new Date(2025, 1, 23)); // February 23, 2025
   const visitStart = useRef(Date.now());
 
   useEffect(() => {
-    // Guard against StrictMode's double-mount firing two inserts
-    if (sessionStorage.getItem(VISIT_ID)) return;
-    sessionStorage.setItem(VISIT_ID, "1");
+    // Fixed key means whichever module instance fires first blocks all others
+    if (sessionStorage.getItem(SESSION_GUARD)) return;
+    sessionStorage.setItem(SESSION_GUARD, VISIT_ID);
 
     const rowId = { current: null };
 
@@ -24,7 +26,7 @@ function App() {
       .select("id")
       .single()
       .then(({ data, error }) => {
-        if (error) { console.error("View tracking error:", error.message); return; }
+        if (error) { /* View tracking error */ return; }
         rowId.current = data.id;
       });
 
@@ -86,7 +88,7 @@ function App() {
     <div className="app">
       {/* Header */}
       <header className="header">
-        <h1>Spring Foliage Map 2025</h1>
+        <h1>Spring Foliage Map 2026</h1>
         <p className="tagline">Watch spring unfold across the U.S.</p>
       </header>
 
