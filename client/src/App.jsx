@@ -22,7 +22,13 @@ function App() {
     // Step 1: INSERT a view row on mount — visit_id ensures DB-level deduplication on retries
     supabase
       .from("Views")
-      .insert({ project: "Spring Foliage Map", page: "Home", views: 1, visit_id: VISIT_ID })
+      .insert({ 
+        project: "Spring Foliage Map", 
+        page: "Home", 
+        views: 1, 
+        visit_id: VISIT_ID,
+        referrer: document.referrer || "direct"
+      })
       .select("id")
       .single()
       .then(({ data, error }) => {
