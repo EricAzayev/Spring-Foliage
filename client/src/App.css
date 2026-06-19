@@ -72,6 +72,36 @@
   background-color: #faf8f0;
 }
 
+.view-mode-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.view-mode-button {
+  border: 1px solid rgba(46, 46, 46, 0.2);
+  border-radius: 999px;
+  background-color: #f2efe4;
+  color: #2e2e2e;
+  font-family: "Roboto", sans-serif;
+  font-size: 0.95rem;
+  padding: 0.65rem 1rem;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.view-mode-button:hover {
+  border-color: #556b2f;
+  background-color: #e8e3cf;
+}
+
+.view-mode-button.active {
+  background-color: #556b2f;
+  border-color: #556b2f;
+  color: #ffffff;
+}
+
 /* Date Slider */
 .slider-container {
   max-width: 1330px;
@@ -198,6 +228,15 @@
 
   .legend {
     gap: 1rem;
+  }
+
+  .view-mode-controls {
+    gap: 0.5rem;
+  }
+
+  .view-mode-button {
+    font-size: 0.85rem;
+    padding: 0.55rem 0.85rem;
   }
 
   .date-display {

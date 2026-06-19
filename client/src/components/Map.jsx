@@ -24,8 +24,16 @@ const tileBounds = (tile) => {
 };
 
 const SUPABASE_TILES_URL = "https://hsuqpowsxssezkbpkrwk.supabase.co/storage/v1/object/public/tiles";
+const BASE_TERRAIN_COLOR = "#E8DCC8";
+const SNOW_ONLY_TERRAIN_COLOR = "#6B5137";
+const MIN_VISIBLE_SNOW_CM = 2.0;
 
-const Map = ({ dayOfYear }) => {
+const EMPTY_SNOW_COLLECTION = {
+  type: "FeatureCollection",
+  features: [],
+};
+
+const Map = ({ dayOfYear, viewMode, snowDate }) => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
@@ -40,11 +48,15 @@ const Map = ({ dayOfYear }) => {
   const geoTiffData = useRef(null);
   const activeTiles = useRef(new Set()); // Track rendered tile positions (z-x-y)
   const renderGenRef = useRef(0);          // Generation counter to cancel stale renders
+  const snowDataCache = useRef(new globalThis.Map());
+  const snowLoadGenRef = useRef(0);
   const dayOfYearRef = useRef(dayOfYear);
   const mapModeRef = useRef(mapMode);
+  const viewModeRef = useRef(viewMode);
   const geoTiffLoadedRef = useRef(geoTiffLoaded);
   useEffect(() => { dayOfYearRef.current = dayOfYear; }, [dayOfYear]);
   useEffect(() => { mapModeRef.current = mapMode; }, [mapMode]);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
   useEffect(() => { geoTiffLoadedRef.current = geoTiffLoaded; }, [geoTiffLoaded]);
 
   const foliageColors = {
@@ -57,9 +69,101 @@ const Map = ({ dayOfYear }) => {
     postBloom: "#006400",
   };
 
+  const setSnowDataOnMap = (snowData) => {
+    if (!map.current?.getSource("snow-points")) return;
+    map.current.getSource("snow-points").setData(snowData);
+  };
+
+  const loadSnowData = async (date) => {
+    if (!date) return;
+
+    const filename = formatSnowFilename(date);
+    const requestGen = ++snowLoadGenRef.current;
+
+    try {
+      let snowData = snowDataCache.current.get(filename);
+      if (!snowData) {
+        const response = await fetch(`/snow_data/${filename}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const text = await response.text();
+        snowData = parseSnowTextToGeoJSON(text);
+        snowDataCache.current.set(filename, snowData);
+      }
+
+      if (requestGen !== snowLoadGenRef.current) return;
+      setSnowDataOnMap(snowData);
+    } catch (error) {
+      console.error(`Failed to load snow data for ${filename}:`, error);
+      if (requestGen === snowLoadGenRef.current) {
+        setSnowDataOnMap(EMPTY_SNOW_COLLECTION);
+      }
+    }
+  };
+
+  const syncOverlayVisibility = (nextViewMode = viewMode, nextMapMode = mapMode) => {
+    if (!map.current || !map.current.loaded() || !map.current.getStyle()) return;
+
+    const showSpring = nextViewMode === "spring" || nextViewMode === "combined";
+    const showSnowSurface = nextViewMode === "snow" || nextViewMode === "combined";
+    const showSnowPoints = nextViewMode === "combined";
+
+    if (map.current.getLayer("us-terrain")) {
+      map.current.setPaintProperty(
+        "us-terrain",
+        "fill-color",
+        nextViewMode === "snow" ? SNOW_ONLY_TERRAIN_COLOR : BASE_TERRAIN_COLOR,
+      );
+    }
+
+    if (map.current.getLayer("foliage-layer-cpu")) {
+      map.current.setLayoutProperty(
+        "foliage-layer-cpu",
+        "visibility",
+        showSpring && nextMapMode === "cpu" ? "visible" : "none",
+      );
+    }
+
+    for (const posKey of activeTiles.current) {
+      const layerId = `foliage-layer-${posKey}`;
+      if (map.current.getLayer(layerId)) {
+        map.current.setLayoutProperty(
+          layerId,
+          "visibility",
+          showSpring && nextMapMode === "gpu" ? "visible" : "none",
+        );
+      }
+    }
+
+    [0, 1].forEach((slot) => {
+      const layerId = `foliage-layer-raster-${slot}`;
+      if (map.current.getLayer(layerId)) {
+        map.current.setLayoutProperty(
+          layerId,
+          "visibility",
+          showSpring && nextMapMode === "raster" ? "visible" : "none",
+        );
+      }
+    });
+
+    ["snow-heat", "snow-points-glow", "snow-points-fill"].forEach((layerId) => {
+      if (map.current.getLayer(layerId)) {
+        const isPointLayer = layerId === "snow-points-glow" || layerId === "snow-points-fill";
+        map.current.setLayoutProperty(
+          layerId,
+          "visibility",
+          isPointLayer
+            ? (showSnowPoints ? "visible" : "none")
+            : (showSnowSurface ? "visible" : "none"),
+        );
+      }
+    });
+  };
+
   // Helper function to render GPU tiles for current viewport
   const updateGPUTiles = async (processor, dayOfYear) => {
-    if (!processor || !map.current || mapModeRef.current !== "gpu") return;
+    if (!processor || !map.current || mapModeRef.current !== "gpu" || viewModeRef.current === "snow") return;
 
     const gen = ++renderGenRef.current;
 
@@ -120,7 +224,7 @@ const Map = ({ dayOfYear }) => {
             map.current.addLayer({
               id: layerId, type: 'raster', source: sourceId,
               paint: { 'raster-opacity': 0.65 },
-              layout: { visibility: 'visible' },
+              layout: { visibility: viewModeRef.current === "snow" ? 'none' : 'visible' },
             }, 'state-borders-top');
             activeTiles.current.add(posKey);
           } catch (e) {
@@ -195,7 +299,7 @@ const Map = ({ dayOfYear }) => {
       setGeoTiffLoaded(true);
 
       // Kick off first GPU render if already in GPU mode
-      if (mapModeRef.current === "gpu" && ok) {
+      if (mapModeRef.current === "gpu" && ok && viewModeRef.current !== "snow") {
         updateGPUTiles(processor, currentDay);
       }
 
@@ -241,7 +345,9 @@ const Map = ({ dayOfYear }) => {
         "raster-opacity": 0,
         "raster-opacity-transition": { duration: 200, delay: 0 },
       },
-      layout: { visibility: "visible" },
+      layout: {
+        visibility: viewModeRef.current === "snow" || mapModeRef.current !== "raster" ? "none" : "visible",
+      },
     }, "state-borders-top");
 
     rasterSlotRef.current = newSlot;
@@ -284,7 +390,7 @@ const Map = ({ dayOfYear }) => {
 
     // Re-render GPU tiles once the map settles (pan or zoom complete)
     map.current.on("moveend", () => {
-      if (mapModeRef.current === "gpu" && gpuProcessor.current && geoTiffLoadedRef.current) {
+      if (mapModeRef.current === "gpu" && gpuProcessor.current && geoTiffLoadedRef.current && viewModeRef.current !== "snow") {
         updateGPUTiles(gpuProcessor.current, dayOfYearRef.current);
       }
     });
@@ -331,6 +437,87 @@ const Map = ({ dayOfYear }) => {
         type: "fill",
         source: "state-borders",
         paint: { "fill-color": "#E8DCC8", "fill-opacity": 1 },
+      });
+
+      map.current.addSource("snow-points", {
+        type: "geojson",
+        data: EMPTY_SNOW_COLLECTION,
+      });
+
+      map.current.addLayer({
+        id: "snow-heat",
+        type: "heatmap",
+        source: "snow-points",
+        paint: {
+          "heatmap-weight": [
+            "interpolate", ["linear"], ["get", "snowWeight"],
+            0, 0,
+            1, 0.4,
+            4, 1,
+          ],
+          "heatmap-intensity": 1.15,
+          "heatmap-radius": [
+            "interpolate", ["linear"], ["zoom"],
+            3, 14,
+            5, 24,
+            7, 32,
+          ],
+          "heatmap-color": [
+            "interpolate", ["linear"], ["heatmap-density"],
+            0.00, "rgba(0,0,0,0)",
+            0.20, "#819E8D",
+            0.45, "#459194",
+            0.70, "#2F3E8B",
+            1.00, "#4E1D7D",
+          ],
+          "heatmap-opacity": 0.82,
+        },
+        layout: { visibility: viewModeRef.current === "spring" ? "none" : "visible" },
+      });
+
+      map.current.addLayer({
+        id: "snow-points-glow",
+        type: "circle",
+        source: "snow-points",
+        paint: {
+          "circle-radius": [
+            "interpolate", ["linear"], ["get", "amountCm"],
+            MIN_VISIBLE_SNOW_CM, 1,
+            25, 2,
+            100, 4,
+            250, 7,
+            500, 10,
+          ],
+          "circle-color": "#ffffff",
+          "circle-opacity": [
+            "interpolate", ["linear"], ["get", "amountCm"],
+            MIN_VISIBLE_SNOW_CM, 0.08,
+            500, 0.25,
+          ],
+          "circle-blur": 0.8,
+        },
+        layout: { visibility: viewModeRef.current === "combined" ? "visible" : "none" },
+      });
+
+      map.current.addLayer({
+        id: "snow-points-fill",
+        type: "circle",
+        source: "snow-points",
+        paint: {
+          "circle-radius": [
+            "interpolate", ["linear"], ["get", "amountCm"],
+            MIN_VISIBLE_SNOW_CM, 0.8,
+            25, 1.6,
+            100, 4,
+            250, 7,
+            500, 10,
+          ],
+          "circle-color": "#f8fcff",
+          "circle-opacity": 0.65,
+          "circle-stroke-color": "#d9edf7",
+          "circle-stroke-width": 0.6,
+        },
+        layout: { visibility: viewModeRef.current === "combined" ? "visible" : "none" },
       });
 
       // Hillshading — draws light/shadow on terrain so elevation reads through foliage
@@ -380,9 +567,11 @@ const Map = ({ dayOfYear }) => {
       });
 
       // If starting in raster mode, show tiles immediately — no GeoTIFF needed
-      if (mapModeRef.current === "raster") {
+      if (mapModeRef.current === "raster" && viewModeRef.current !== "snow") {
         updateRasterTiles(dayOfYearRef.current);
       }
+
+      loadSnowData(snowDate);
 
       // Load states (always needed for borders), then conditionally load GeoTIFF
       fetch("/us-states.json").then(res => res.json()).then(states => {
@@ -409,34 +598,26 @@ const Map = ({ dayOfYear }) => {
     if (!map.current || !map.current.loaded() || !map.current.getStyle()) return;
 
     try {
-      if (map.current.getLayer("foliage-layer-cpu")) {
-        map.current.setLayoutProperty("foliage-layer-cpu", "visibility", mapMode === "cpu" ? "visible" : "none");
-      }
-      // GPU tiles are individually named — toggle visibility on all active tile layers
-      for (const posKey of activeTiles.current) {
-        const layerId = `foliage-layer-${posKey}`;
-        if (map.current.getLayer(layerId)) {
-          map.current.setLayoutProperty(layerId, "visibility", mapMode === "gpu" ? "visible" : "none");
-        }
-      }
-      // Raster mode — hide/show both possible slots
-      [0, 1].forEach(slot => {
-        const lid = `foliage-layer-raster-${slot}`;
-        if (map.current.getLayer(lid)) {
-          map.current.setLayoutProperty(lid, "visibility", mapMode === "raster" ? "visible" : "none");
-        }
-      });
-      if (mapMode === "raster") {
+      syncOverlayVisibility(viewMode, mapMode);
+      if (mapMode === "raster" && viewMode !== "snow") {
         updateRasterTiles(dayOfYearRef.current);
       }
     } catch (e) {
       console.log("Layer visibility update error:", e);
     }
-  }, [mapMode]);
+  }, [mapMode, viewMode]);
+
+  useEffect(() => {
+    loadSnowData(snowDate);
+  }, [snowDate]);
 
   // Sync colors when dayOfYear changes (CPU and GPU modes)
   useEffect(() => {
     if (!map.current) return;
+
+    if (viewMode === "snow") {
+      return;
+    }
 
     if (mapMode === "cpu") {
       try {
@@ -471,7 +652,7 @@ const Map = ({ dayOfYear }) => {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dayOfYear, mapMode]);
+  }, [dayOfYear, mapMode, viewMode]);
 
   return (
     <div style={{ position: "relative" }}>
@@ -534,6 +715,77 @@ const Map = ({ dayOfYear }) => {
 };
 
 // --- Helper Functions ---
+
+function formatSnowFilename(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `snowdepth_${year}${month}${day}06_m.txt`;
+}
+
+function parseSnowTextToGeoJSON(text) {
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (lines.length < 3) {
+    return EMPTY_SNOW_COLLECTION;
+  }
+
+  const header = lines[1].split("|");
+  const latitudeIndex = header.indexOf("Latitude");
+  const longitudeIndex = header.indexOf("Longitude");
+  const amountIndex = header.indexOf("Amount");
+  const elevationIndex = header.indexOf("Elevation");
+  const stationIdIndex = header.indexOf("Station_Id");
+  const nameIndex = header.indexOf("Name");
+
+  if (latitudeIndex === -1 || longitudeIndex === -1 || amountIndex === -1) {
+    return EMPTY_SNOW_COLLECTION;
+  }
+
+  const features = lines.slice(2)
+    .map((line) => line.split("|"))
+    .map((columns) => {
+      const latitude = Number.parseFloat(columns[latitudeIndex]);
+      const longitude = Number.parseFloat(columns[longitudeIndex]);
+      const amountCm = Number.parseFloat(columns[amountIndex]);
+      const elevationM = Number.parseFloat(columns[elevationIndex]);
+
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(amountCm)) {
+        return null;
+      }
+
+      if (amountCm < MIN_VISIBLE_SNOW_CM) {
+        return null;
+      }
+
+      if (longitude < -130 || longitude > -65 || latitude < 24 || latitude > 50) {
+        return null;
+      }
+
+      const elevationFactor = Number.isFinite(elevationM) ? Math.min(1.4, 0.6 + elevationM / 3000) : 1;
+      const snowWeight = Math.max(0, Math.log1p(amountCm) * elevationFactor);
+
+      return {
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [longitude, latitude],
+        },
+        properties: {
+          amountCm,
+          elevationM: Number.isFinite(elevationM) ? elevationM : null,
+          snowWeight,
+          stationId: columns[stationIdIndex] || "",
+          name: columns[nameIndex] || "",
+        },
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    type: "FeatureCollection",
+    features,
+  };
+}
 
 function createFoliageGrid(statesGeoJSON, geoTiffData) {
   const bbox = [-130, 24, -65, 50];

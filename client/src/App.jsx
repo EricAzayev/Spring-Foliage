@@ -2,9 +2,28 @@ import { useState } from "react";
 import Map from "./components/Map";
 import "./App.css";
 
+const AVAILABLE_SNOW_DATES = [
+  new Date(2026, 1, 23),
+  new Date(2026, 1, 24),
+  new Date(2026, 1, 25),
+  new Date(2026, 1, 26),
+  new Date(2026, 1, 27),
+  new Date(2026, 1, 28),
+  new Date(2026, 2, 1),
+];
+
+const getDayOfYear = (date) => {
+  const startOfYear = new Date(date.getFullYear(), 0, 0);
+  const diff = date - startOfYear;
+  const oneDay = 1000 * 60 * 60 * 24;
+  return Math.floor(diff / oneDay);
+};
+
 function App() {
-  const [currentDate, setCurrentDate] = useState(new Date(2025, 1, 23)); // February 23, 2025
-  const [dayOfYear, setDayOfYear] = useState(54); // Day 54 = February 23
+  const [sliderIndex, setSliderIndex] = useState(0);
+  const [viewMode, setViewMode] = useState("snow");
+  const currentDate = AVAILABLE_SNOW_DATES[sliderIndex];
+  const dayOfYear = getDayOfYear(currentDate);
 
   const colorLegend = [
     { color: "#4a3728", label: "None" },
@@ -17,11 +36,7 @@ function App() {
   ];
 
   const handleSliderChange = (e) => {
-    const day = parseInt(e.target.value);
-    setDayOfYear(day);
-    // Convert day of year to date
-    const date = new Date(2025, 0, day);
-    setCurrentDate(date);
+    setSliderIndex(parseInt(e.target.value, 10));
   };
 
   const formatDate = (date) => {
@@ -36,7 +51,7 @@ function App() {
     <div className="app">
       {/* Header */}
       <header className="header">
-        <h1>Spring Foliage Map 2025</h1>
+        <h1>Spring Foliage Map 2026</h1>
         <p className="tagline">Watch spring unfold across the U.S.</p>
       </header>
 
@@ -57,7 +72,23 @@ function App() {
 
       {/* Map Placeholder (Purple Square) */}
       <div className="map-wrapper">
-        <Map dayOfYear={dayOfYear} />
+        <div className="view-mode-controls" aria-label="Map overlay mode">
+          {[
+            { id: "spring", label: "Spring" },
+            { id: "snow", label: "Snow" },
+            { id: "combined", label: "Spring and Snow" },
+          ].map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              className={`view-mode-button ${viewMode === id ? "active" : ""}`}
+              onClick={() => setViewMode(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <Map dayOfYear={dayOfYear} viewMode={viewMode} snowDate={currentDate} />
       </div>
 
       {/* Date Display & Slider */}
@@ -68,15 +99,15 @@ function App() {
         </div>
         <input
           type="range"
-          min="54"
-          max="180"
-          value={dayOfYear}
+          min="0"
+          max={String(AVAILABLE_SNOW_DATES.length - 1)}
+          value={sliderIndex}
           onChange={handleSliderChange}
           className="date-slider"
         />
         <div className="slider-labels">
           <span>February 23</span>
-          <span>June 29</span>
+          <span>March 1</span>
         </div>
       </div>
 
