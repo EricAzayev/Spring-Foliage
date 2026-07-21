@@ -39,6 +39,7 @@ Method implemented
 Outputs
 - Rasters: snow_data_extraction/output/rasters/snowdepth_YYYYMMDD.tif
 - Visual overlays: snow_data_extraction/output/visualizations/snowdepth_YYYYMMDD_overlay.png
+- Frontend tile pyramids: client/public/snow_tiles/YYYYMMDD/{z}/{x}/{y}.png
 
 Run
 
@@ -48,10 +49,14 @@ Run
 2. Execute:
 	python3 snow_data_extraction/build_daily_snow_surfaces.py
 
+3. Generate frontend tiles from the interpolated rasters:
+  python3 snow_data_extraction/generate_snow_tiles.py
+
 Optional arguments
 - --resolution-m 1000 for 1 km grids.
 - --dem /path/to/dem.tif to use a dedicated topographic DEM.
 - --station-dir /path/to/snow_files
 - --states-geojson /path/to/us-states.json
+- --min-zoom / --max-zoom in generate_snow_tiles.py to control tile pyramid depth.
 
 
