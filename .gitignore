@@ -12,5 +12,9 @@ data_generator/gpu_foliage/
 
 # Generated Assets
 client/public/tiles/
+client/public/snow_data/
+client/public/snow_tiles/
+snow_data_extraction/output/rasters/
+snow_data_extraction/output/visualizations/
 
 venv/

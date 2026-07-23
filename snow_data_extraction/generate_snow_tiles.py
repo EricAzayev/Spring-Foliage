@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+import json
 
 import mercantile
 import numpy as np
@@ -116,6 +117,28 @@ def generate_tiles_for_raster(raster_path: Path, output_root: Path, min_zoom: in
     print(f"Generated snow tiles for {day_key}")
 
 
+def write_manifest(output_root: Path, rasters: list[Path], min_zoom: int, max_zoom: int) -> None:
+    dates = []
+    for raster in rasters:
+        match = DAY_RE.search(raster.name)
+        if match:
+            dates.append(match.group(1))
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_root / "index.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "dates": dates,
+                "minzoom": min_zoom,
+                "maxzoom": max_zoom,
+            },
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate web tiles from daily snow interpolation rasters.")
     parser.add_argument(
@@ -140,6 +163,8 @@ def main() -> None:
 
     for raster in rasters:
         generate_tiles_for_raster(raster, args.output_dir, args.min_zoom, args.max_zoom)
+
+    write_manifest(args.output_dir, rasters, args.min_zoom, args.max_zoom)
 
 
 if __name__ == "__main__":

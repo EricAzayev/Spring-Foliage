@@ -110,6 +110,43 @@
   background-color: #faf8f0;
 }
 
+.timeline-note {
+  margin: 0 0 1rem;
+  text-align: center;
+  color: #556b2f;
+  font-family: "Roboto", sans-serif;
+}
+
+.timeline-panel {
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(46, 46, 46, 0.1);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(243, 238, 220, 0.95), rgba(250, 248, 240, 1));
+}
+
+.timeline-panel-snow {
+  background: linear-gradient(180deg, rgba(231, 239, 245, 0.95), rgba(250, 252, 255, 1));
+}
+
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.timeline-label {
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #556b2f;
+  font-family: "Roboto", sans-serif;
+}
+
 .date-display {
   text-align: center;
   font-size: 1.5rem;
@@ -135,6 +172,10 @@
   -webkit-appearance: none;
   appearance: none;
   cursor: pointer;
+}
+
+.date-slider-snow {
+  background: linear-gradient(to right, #6f7f91, #dce9f5);
 }
 
 .date-slider::-webkit-slider-thumb {
@@ -241,6 +282,14 @@
 
   .date-display {
     font-size: 1.2rem;
+  }
+
+  .timeline-panel {
+    padding: 1rem;
+  }
+
+  .timeline-header {
+    gap: 0.5rem;
   }
 
   .article-section h2 {

@@ -27,6 +27,15 @@ const SUPABASE_TILES_URL = "https://hsuqpowsxssezkbpkrwk.supabase.co/storage/v1/
 const BASE_TERRAIN_COLOR = "#E8DCC8";
 const SNOW_ONLY_TERRAIN_COLOR = "#6B5137";
 const SNOW_TILES_URL_PREFIX = "/snow_tiles";
+const DEFAULT_SNOW_TILE_MANIFEST = {
+  dates: [],
+  minzoom: 4,
+  maxzoom: 8,
+};
+
+const logTileDataset = (label, payload) => {
+  console.log(`[Map Tiles] ${label}`, payload);
+};
 
 const Map = ({ dayOfYear, viewMode, snowDate }) => {
   const mapContainer = useRef(null);
@@ -44,6 +53,8 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
   const activeTiles = useRef(new Set()); // Track rendered tile positions (z-x-y)
   const renderGenRef = useRef(0);          // Generation counter to cancel stale renders
   const snowRasterSlotRef = useRef(0);
+  const snowTileManifestRef = useRef(null);
+  const snowWarningShownRef = useRef(false);
   const dayOfYearRef = useRef(dayOfYear);
   const mapModeRef = useRef(mapMode);
   const viewModeRef = useRef(viewMode);
@@ -63,11 +74,71 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     postBloom: "#006400",
   };
 
-  const updateSnowRasterTiles = (date) => {
+  const removeSnowRasterLayers = () => {
+    if (!map.current) return;
+
+    [0, 1].forEach((slot) => {
+      const layerId = `snow-raster-layer-${slot}`;
+      const sourceId = `snow-raster-${slot}`;
+      if (map.current.getLayer(layerId)) map.current.removeLayer(layerId);
+      if (map.current.getSource(sourceId)) map.current.removeSource(sourceId);
+    });
+  };
+
+  const loadSnowTileManifest = async () => {
+    if (snowTileManifestRef.current) return snowTileManifestRef.current;
+
+    try {
+      const response = await fetch(`${SNOW_TILES_URL_PREFIX}/index.json`, { cache: "no-store" });
+      if (!response.ok) {
+        snowTileManifestRef.current = DEFAULT_SNOW_TILE_MANIFEST;
+        return snowTileManifestRef.current;
+      }
+
+      const manifest = await response.json();
+      snowTileManifestRef.current = {
+        dates: Array.isArray(manifest.dates) ? manifest.dates : [],
+        minzoom: Number.isFinite(manifest.minzoom) ? manifest.minzoom : DEFAULT_SNOW_TILE_MANIFEST.minzoom,
+        maxzoom: Number.isFinite(manifest.maxzoom) ? manifest.maxzoom : DEFAULT_SNOW_TILE_MANIFEST.maxzoom,
+      };
+      return snowTileManifestRef.current;
+    } catch (error) {
+      console.warn("Snow tile manifest unavailable:", error);
+      snowTileManifestRef.current = DEFAULT_SNOW_TILE_MANIFEST;
+      return snowTileManifestRef.current;
+    }
+  };
+
+  const updateSnowRasterTiles = async (date) => {
     if (!map.current || !date) return;
 
+    const manifest = await loadSnowTileManifest();
+    if (!map.current) return;
+
     const dayKey = formatSnowDayKey(date);
+    if (!manifest.dates.includes(dayKey)) {
+      removeSnowRasterLayers();
+      if (!snowWarningShownRef.current) {
+        console.warn(
+          `Snow tiles for ${dayKey} are not available. Run snow_data_extraction/build_daily_snow_surfaces.py and snow_data_extraction/generate_snow_tiles.py to create them.`
+        );
+        snowWarningShownRef.current = true;
+      }
+      return;
+    }
+
+    snowWarningShownRef.current = false;
     const tileUrl = `${SNOW_TILES_URL_PREFIX}/${dayKey}/{z}/{x}/{y}.png`;
+
+    logTileDataset("snow raster source", {
+      viewMode: viewModeRef.current,
+      mapMode: mapModeRef.current,
+      snowDate: dayKey,
+      tileUrl,
+      minzoom: manifest.minzoom,
+      maxzoom: manifest.maxzoom,
+      availableDates: manifest.dates.length,
+    });
 
     const newSlot = snowRasterSlotRef.current === 0 ? 1 : 0;
     const newSourceId = `snow-raster-${newSlot}`;
@@ -84,8 +155,8 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
       type: "raster",
       tiles: [tileUrl],
       tileSize: 256,
-      minzoom: 4,
-      maxzoom: 8,
+      minzoom: manifest.minzoom,
+      maxzoom: manifest.maxzoom,
       bounds: [-130, 24, -65, 50],
     });
 
@@ -190,6 +261,15 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
       for (let x = minX; x <= maxX; x++)
         for (let y = minY; y <= maxY; y++)
           tileList.push({ x, y, z: zoom });
+
+      logTileDataset("gpu render batch", {
+        viewMode: viewModeRef.current,
+        dayOfYear,
+        zoom,
+        tileCount: tileList.length,
+        firstTile: tileList[0] ?? null,
+        lastTile: tileList[tileList.length - 1] ?? null,
+      });
 
       // Generate all tiles in parallel (WebGL calls are synchronous — Promise.all batches results)
       const canvases = await Promise.all(
@@ -322,6 +402,15 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     if (!map.current) return;
     const dayStr = String(day).padStart(3, '0');
     const tileUrl = `${SUPABASE_TILES_URL}/day_${dayStr}/{z}/{x}/{y}.png`;
+
+    logTileDataset("spring raster source", {
+      viewMode: viewModeRef.current,
+      mapMode: mapModeRef.current,
+      dayOfYear: day,
+      tileUrl,
+      minzoom: 4,
+      maxzoom: 4,
+    });
 
     // Alternate between two slots so the old layer stays visible while the new one loads
     const newSlot = rasterSlotRef.current === 0 ? 1 : 0;

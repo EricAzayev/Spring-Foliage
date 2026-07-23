@@ -48,6 +48,8 @@ STATION_COLUMNS = [
     "Zip_Code",
 ]
 
+MAX_KRIGING_POINTS = 400
+
 
 def _pick_conus_albers() -> CRS:
     """Prefer ESRI:102003 and fall back to EPSG:5070 when unavailable."""
@@ -97,6 +99,9 @@ def parse_station_file(path: Path) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=header)
     rename = {"Amount": "snow_cm", "Elevation": "station_elevation_m"}
     df = df.rename(columns=rename)
+
+    if "station_elevation_m" in df.columns:
+        df["station_elevation_m"] = df["station_elevation_m"].astype(str).str.extract(r"([-+]?\d*\.?\d+)", expand=False)
 
     for c in ["Latitude", "Longitude", "station_elevation_m", "snow_cm"]:
         if c in df.columns:
@@ -214,6 +219,13 @@ def fit_regression_kriging(day_gdf: gpd.GeoDataFrame, grid: GridSpec, conus_mask
     used_points = day_gdf.loc[valid, "geometry"]
     px = np.array([p.x for p in used_points], dtype=float)
     py = np.array([p.y for p in used_points], dtype=float)
+
+    if len(residuals) > MAX_KRIGING_POINTS:
+        rng = np.random.default_rng(42)
+        sample_idx = np.sort(rng.choice(len(residuals), size=MAX_KRIGING_POINTS, replace=False))
+        px = px[sample_idx]
+        py = py[sample_idx]
+        residuals = residuals[sample_idx]
 
     xs = grid.transform.c + (np.arange(grid.width) + 0.5) * grid.transform.a
     ys = grid.transform.f + (np.arange(grid.height) + 0.5) * grid.transform.e

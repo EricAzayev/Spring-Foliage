@@ -2,6 +2,8 @@ import { useState } from "react";
 import Map from "./components/Map";
 import "./App.css";
 
+const SPRING_START_DAY = 54;
+const SPRING_END_DAY = 180;
 const AVAILABLE_SNOW_DATES = [
   new Date(2026, 1, 23),
   new Date(2026, 1, 24),
@@ -19,11 +21,17 @@ const getDayOfYear = (date) => {
   return Math.floor(diff / oneDay);
 };
 
+const getDateFromDayOfYear = (year, dayOfYear) => new Date(year, 0, dayOfYear);
+
 function App() {
-  const [sliderIndex, setSliderIndex] = useState(0);
+  const [springDayOfYear, setSpringDayOfYear] = useState(SPRING_START_DAY);
+  const [snowSliderIndex, setSnowSliderIndex] = useState(0);
   const [viewMode, setViewMode] = useState("snow");
-  const currentDate = AVAILABLE_SNOW_DATES[sliderIndex];
-  const dayOfYear = getDayOfYear(currentDate);
+
+  const showSpringTimeline = viewMode === "spring" || viewMode === "combined";
+  const showSnowTimeline = viewMode === "snow" || viewMode === "combined";
+  const snowDate = AVAILABLE_SNOW_DATES[snowSliderIndex];
+  const springDate = getDateFromDayOfYear(snowDate.getFullYear(), springDayOfYear);
 
   const colorLegend = [
     { color: "#4a3728", label: "None" },
@@ -35,8 +43,12 @@ function App() {
     { color: "#1b5e20", label: "Post" },
   ];
 
-  const handleSliderChange = (e) => {
-    setSliderIndex(parseInt(e.target.value, 10));
+  const handleSpringSliderChange = (e) => {
+    setSpringDayOfYear(parseInt(e.target.value, 10));
+  };
+
+  const handleSnowSliderChange = (e) => {
+    setSnowSliderIndex(parseInt(e.target.value, 10));
   };
 
   const formatDate = (date) => {
@@ -88,27 +100,62 @@ function App() {
             </button>
           ))}
         </div>
-        <Map dayOfYear={dayOfYear} viewMode={viewMode} snowDate={currentDate} />
+        <Map dayOfYear={springDayOfYear} viewMode={viewMode} snowDate={snowDate} />
       </div>
 
       {/* Date Display & Slider */}
       <div className="slider-container">
-        <div className="date-display">
-          {formatDate(currentDate)}{" "}
-          <span className="day-label">(Day {dayOfYear})</span>
-        </div>
-        <input
-          type="range"
-          min="0"
-          max={String(AVAILABLE_SNOW_DATES.length - 1)}
-          value={sliderIndex}
-          onChange={handleSliderChange}
-          className="date-slider"
-        />
-        <div className="slider-labels">
-          <span>February 23</span>
-          <span>March 1</span>
-        </div>
+        {viewMode === "combined" && (
+          <p className="timeline-note">
+            Spring foliage and snow coverage use separate dates in combined view.
+          </p>
+        )}
+
+        {showSpringTimeline && (
+          <section className="timeline-panel">
+            <div className="timeline-header">
+              <span className="timeline-label">Spring foliage timeline</span>
+              <div className="date-display">
+                {formatDate(springDate)} <span className="day-label">(Day {springDayOfYear})</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={String(SPRING_START_DAY)}
+              max={String(SPRING_END_DAY)}
+              value={springDayOfYear}
+              onChange={handleSpringSliderChange}
+              className="date-slider"
+            />
+            <div className="slider-labels">
+              <span>February 23</span>
+              <span>June 29</span>
+            </div>
+          </section>
+        )}
+
+        {showSnowTimeline && (
+          <section className="timeline-panel timeline-panel-snow">
+            <div className="timeline-header">
+              <span className="timeline-label">Snow coverage timeline</span>
+              <div className="date-display">
+                {formatDate(snowDate)} <span className="day-label">(Day {getDayOfYear(snowDate)})</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max={String(AVAILABLE_SNOW_DATES.length - 1)}
+              value={snowSliderIndex}
+              onChange={handleSnowSliderChange}
+              className="date-slider date-slider-snow"
+            />
+            <div className="slider-labels">
+              <span>February 23</span>
+              <span>March 1</span>
+            </div>
+          </section>
+        )}
       </div>
 
       {/* Article Section */}
