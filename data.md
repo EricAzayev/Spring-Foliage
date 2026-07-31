@@ -24,6 +24,8 @@ This is the preview layer. It contains PNG overlays such as `snowdepth_20260310_
 4. [client/public/snow_tiles](client/public/snow_tiles)
 This is the web-delivery layer. It contains tiled PNG pyramids and an `index.json` manifest for the frontend. These files are also derived from the daily rasters, not directly from `snow_data`. Their purpose is browser rendering: MapLibre can stream small Web Mercator tiles efficiently, but it cannot use the full daily analysis GeoTIFFs directly as a production map source.
 
+Snow tiles use the same XYZ tile structure as the spring tile system, but they currently cover zooms 4 through 8 according to [client/public/snow_tiles/index.json](client/public/snow_tiles/index.json). The layout is `snow_tiles/YYYYMMDD/{z}/{x}/{y}.png`, where `YYYYMMDD` is the snow date, `z` is zoom level, and `x` and `y` are tile column and row. That is similar to spring tiles, but spring uses day-of-year folders such as `day_069` rather than calendar-date folders.
+
 So the derivation graph is:
 
 `NOHRSC feed -> snow_data -> rasters -> visualizations`

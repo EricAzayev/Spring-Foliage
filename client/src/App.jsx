@@ -4,15 +4,22 @@ import "./App.css";
 
 const SPRING_START_DAY = 54;
 const SPRING_END_DAY = 180;
-const AVAILABLE_SNOW_DATES = [
-  new Date(2026, 1, 23),
-  new Date(2026, 1, 24),
-  new Date(2026, 1, 25),
-  new Date(2026, 1, 26),
-  new Date(2026, 1, 27),
-  new Date(2026, 1, 28),
-  new Date(2026, 2, 1),
-];
+const SNOW_START_DATE = new Date(2026, 1, 23);
+const SNOW_END_DATE = new Date(2026, 5, 29);
+
+const buildDateRange = (startDate, endDate) => {
+  const dates = [];
+  const current = new Date(startDate);
+
+  while (current <= endDate) {
+    dates.push(new Date(current));
+    current.setDate(current.getDate() + 1);
+  }
+
+  return dates;
+};
+
+const AVAILABLE_SNOW_DATES = buildDateRange(SNOW_START_DATE, SNOW_END_DATE);
 
 const getDayOfYear = (date) => {
   const startOfYear = new Date(date.getFullYear(), 0, 0);
@@ -152,7 +159,7 @@ function App() {
             />
             <div className="slider-labels">
               <span>February 23</span>
-              <span>March 1</span>
+              <span>June 29</span>
             </div>
           </section>
         )}

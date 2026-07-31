@@ -8,13 +8,13 @@ data_generator/__pycache__/
 *.py[cod]
 
 # Virtual Environments
-data_generator/gpu_foliage/
+spring_data_generator/gpu_foliage/
 
 # Generated Assets
 client/public/tiles/
 client/public/snow_data/
 client/public/snow_tiles/
-snow_data_extraction/output/rasters/
-snow_data_extraction/output/visualizations/
+snow_data_generator/output/rasters/
+snow_data_generator/output/visualizations/
 
 venv/
