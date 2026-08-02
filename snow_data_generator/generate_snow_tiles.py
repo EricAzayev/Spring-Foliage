@@ -3,7 +3,7 @@
 Generate web map tiles from daily regression-kriged snow rasters.
 
 Input rasters:
-  snow_data_extraction/output/rasters/snowdepth_YYYYMMDD.tif
+    snow_data_generator/output/rasters/snowdepth_YYYYMMDD.tif
 
 Output tiles:
   client/public/snow_tiles/YYYYMMDD/{z}/{x}/{y}.png
@@ -38,6 +38,7 @@ SNOW_COLORS = np.array(
 )
 SNOW_STOPS_CM = np.array([2.0, 20.0, 60.0, 120.0], dtype=np.float32)
 DAY_RE = re.compile(r"snowdepth_(\d{8})\.tif$")
+EMPTY_TILE = Image.fromarray(np.zeros((TILE_SIZE, TILE_SIZE, 4), dtype=np.uint8), mode="RGBA")
 
 
 def colorize_snow(depth_cm: np.ndarray) -> np.ndarray:
@@ -63,7 +64,7 @@ def colorize_snow(depth_cm: np.ndarray) -> np.ndarray:
     return rgba
 
 
-def render_tile(src: rasterio.io.DatasetReader, tile: mercantile.Tile) -> Image.Image | None:
+def render_tile(src: rasterio.io.DatasetReader, tile: mercantile.Tile) -> Image.Image:
     bounds = mercantile.bounds(tile)
 
     to_merc = Transformer.from_crs(4326, 3857, always_xy=True)
@@ -86,11 +87,11 @@ def render_tile(src: rasterio.io.DatasetReader, tile: mercantile.Tile) -> Image.
     )
 
     if not np.isfinite(dst).any() or np.nanmax(dst) < 2.0:
-        return None
+        return EMPTY_TILE.copy()
 
     rgba = colorize_snow(dst)
     if rgba[..., 3].max() == 0:
-        return None
+        return EMPTY_TILE.copy()
     return Image.fromarray(rgba, mode="RGBA")
 
 
@@ -107,8 +108,6 @@ def generate_tiles_for_raster(raster_path: Path, output_root: Path, min_zoom: in
             tiles = mercantile.tiles(west, south, east, north, [z])
             for tile in tiles:
                 img = render_tile(src, tile)
-                if img is None:
-                    continue
 
                 out_path = output_root / day_key / str(tile.z) / str(tile.x) / f"{tile.y}.png"
                 out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +143,7 @@ def main() -> None:
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=Path("snow_data_extraction/output/rasters"),
+        default=Path("snow_data_generator/output/rasters"),
         help="Directory containing snowdepth_YYYYMMDD.tif rasters.",
     )
     parser.add_argument(
@@ -154,7 +153,7 @@ def main() -> None:
         help="Output tile root directory.",
     )
     parser.add_argument("--min-zoom", type=int, default=4)
-    parser.add_argument("--max-zoom", type=int, default=8)
+    parser.add_argument("--max-zoom", type=int, default=4)
     args = parser.parse_args()
 
     rasters = sorted(args.input_dir.glob("snowdepth_*.tif"))

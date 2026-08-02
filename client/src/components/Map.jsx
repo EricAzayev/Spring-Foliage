@@ -30,7 +30,7 @@ const SNOW_TILES_URL_PREFIX = "/snow_tiles";
 const DEFAULT_SNOW_TILE_MANIFEST = {
   dates: [],
   minzoom: 4,
-  maxzoom: 8,
+  maxzoom: 4,
 };
 
 const logTileDataset = (label, payload) => {
@@ -120,7 +120,7 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
       removeSnowRasterLayers();
       if (!snowWarningShownRef.current) {
         console.warn(
-          `Snow tiles for ${dayKey} are not available. Run snow_data_extraction/build_daily_snow_surfaces.py and snow_data_extraction/generate_snow_tiles.py to create them.`
+          `Snow tiles for ${dayKey} are not available. Run snow_data_generator/build_daily_snow_surfaces.py and snow_data_generator/generate_snow_tiles.py to create them.`
         );
         snowWarningShownRef.current = true;
       }

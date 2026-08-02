@@ -29,11 +29,13 @@ const getDayOfYear = (date) => {
 };
 
 const getDateFromDayOfYear = (year, dayOfYear) => new Date(year, 0, dayOfYear);
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 function App() {
   const [springDayOfYear, setSpringDayOfYear] = useState(SPRING_START_DAY);
   const [snowSliderIndex, setSnowSliderIndex] = useState(0);
   const [viewMode, setViewMode] = useState("snow");
+  const [snapTimelines, setSnapTimelines] = useState(false);
 
   const showSpringTimeline = viewMode === "spring" || viewMode === "combined";
   const showSnowTimeline = viewMode === "snow" || viewMode === "combined";
@@ -50,12 +52,36 @@ function App() {
     { color: "#1b5e20", label: "Post" },
   ];
 
+  const syncSnowIndexToDay = (dayOfYear) => {
+    const nextIndex = clamp(dayOfYear - SPRING_START_DAY, 0, AVAILABLE_SNOW_DATES.length - 1);
+    setSnowSliderIndex(nextIndex);
+  };
+
   const handleSpringSliderChange = (e) => {
-    setSpringDayOfYear(parseInt(e.target.value, 10));
+    const nextDay = parseInt(e.target.value, 10);
+    setSpringDayOfYear(nextDay);
+
+    if (viewMode === "combined" && snapTimelines) {
+      syncSnowIndexToDay(nextDay);
+    }
   };
 
   const handleSnowSliderChange = (e) => {
-    setSnowSliderIndex(parseInt(e.target.value, 10));
+    const nextIndex = parseInt(e.target.value, 10);
+    setSnowSliderIndex(nextIndex);
+
+    if (viewMode === "combined" && snapTimelines) {
+      setSpringDayOfYear(getDayOfYear(AVAILABLE_SNOW_DATES[nextIndex]));
+    }
+  };
+
+  const handleSnapToggle = () => {
+    const nextSnap = !snapTimelines;
+    setSnapTimelines(nextSnap);
+
+    if (viewMode === "combined" && nextSnap) {
+      setSpringDayOfYear(getDayOfYear(snowDate));
+    }
   };
 
   const formatDate = (date) => {
@@ -113,9 +139,20 @@ function App() {
       {/* Date Display & Slider */}
       <div className="slider-container">
         {viewMode === "combined" && (
-          <p className="timeline-note">
-            Spring foliage and snow coverage use separate dates in combined view.
-          </p>
+          <div className="timeline-sync-bar">
+            <p className="timeline-note">
+              {snapTimelines
+                ? "Spring foliage and snow coverage are snapped to the same date."
+                : "Spring foliage and snow coverage use separate dates in combined view."}
+            </p>
+            <button
+              type="button"
+              className={`timeline-snap-button ${snapTimelines ? "active" : ""}`}
+              onClick={handleSnapToggle}
+            >
+              {snapTimelines ? "Unsnap Timelines" : "Snap Timelines"}
+            </button>
+          </div>
         )}
 
         {showSpringTimeline && (

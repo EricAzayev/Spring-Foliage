@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     watch: {
-      ignored: ['**/public/tiles/**'],
+      ignored: ['**/public/tiles/**', '**/public/snow_tiles/**'],
     },
   },
 })
