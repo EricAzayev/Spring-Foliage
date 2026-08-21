@@ -88,10 +88,11 @@
   font-family: "Roboto", sans-serif;
   font-size: 0.95rem;
   padding: 0.65rem 1rem;
+  cursor: pointer;
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
-.view-mode-button:hover {
+.view-mode-button:hover:not(:disabled) {
   border-color: #556b2f;
   background-color: #e8e3cf;
 }
@@ -100,6 +101,13 @@
   background-color: #556b2f;
   border-color: #556b2f;
   color: #ffffff;
+}
+
+.view-mode-button:disabled {
+  background-color: #e5e2d7;
+  border-color: rgba(46, 46, 46, 0.12);
+  color: #9a978d;
+  cursor: not-allowed;
 }
 
 /* Date Slider */

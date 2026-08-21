@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Map from "./components/Map";
 import "./App.css";
 
@@ -20,6 +20,9 @@ const buildDateRange = (startDate, endDate) => {
 };
 
 const AVAILABLE_SNOW_DATES = buildDateRange(SNOW_START_DATE, SNOW_END_DATE);
+const DEFAULT_SNOW_MANIFEST = {
+  dates: [],
+};
 
 const getDayOfYear = (date) => {
   const startOfYear = new Date(date.getFullYear(), 0, 0);
@@ -34,13 +37,51 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 function App() {
   const [springDayOfYear, setSpringDayOfYear] = useState(SPRING_START_DAY);
   const [snowSliderIndex, setSnowSliderIndex] = useState(0);
-  const [viewMode, setViewMode] = useState("snow");
+  const [viewMode, setViewMode] = useState("spring");
   const [snapTimelines, setSnapTimelines] = useState(false);
+  const [snowDataAvailable, setSnowDataAvailable] = useState(false);
 
   const showSpringTimeline = viewMode === "spring" || viewMode === "combined";
   const showSnowTimeline = viewMode === "snow" || viewMode === "combined";
   const snowDate = AVAILABLE_SNOW_DATES[snowSliderIndex];
   const springDate = getDateFromDayOfYear(snowDate.getFullYear(), springDayOfYear);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const checkSnowAvailability = async () => {
+      try {
+        const response = await fetch("/snow_tiles/index.json", { cache: "no-store" });
+        if (!response.ok) {
+          if (isActive) setSnowDataAvailable(false);
+          return;
+        }
+
+        const manifest = await response.json();
+        const normalizedManifest = {
+          dates: Array.isArray(manifest?.dates) ? manifest.dates : DEFAULT_SNOW_MANIFEST.dates,
+        };
+
+        if (isActive) {
+          setSnowDataAvailable(normalizedManifest.dates.length > 0);
+        }
+      } catch {
+        if (isActive) setSnowDataAvailable(false);
+      }
+    };
+
+    checkSnowAvailability();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!snowDataAvailable && (viewMode === "snow" || viewMode === "combined")) {
+      setViewMode("spring");
+    }
+  }, [snowDataAvailable, viewMode]);
 
   const colorLegend = [
     { color: "#4a3728", label: "None" },
@@ -92,6 +133,12 @@ function App() {
     });
   };
 
+  const viewModes = [
+    { id: "spring", label: "Spring", disabled: false },
+    { id: "snow", label: "Snow", disabled: !snowDataAvailable },
+    { id: "combined", label: "Spring and Snow", disabled: !snowDataAvailable },
+  ];
+
   return (
     <div className="app">
       {/* Header */}
@@ -118,16 +165,18 @@ function App() {
       {/* Map Placeholder (Purple Square) */}
       <div className="map-wrapper">
         <div className="view-mode-controls" aria-label="Map overlay mode">
-          {[
-            { id: "spring", label: "Spring" },
-            { id: "snow", label: "Snow" },
-            { id: "combined", label: "Spring and Snow" },
-          ].map(({ id, label }) => (
+          {viewModes.map(({ id, label, disabled }) => (
             <button
               key={id}
               type="button"
               className={`view-mode-button ${viewMode === id ? "active" : ""}`}
-              onClick={() => setViewMode(id)}
+              onClick={() => {
+                if (!disabled) {
+                  setViewMode(id);
+                }
+              }}
+              disabled={disabled}
+              aria-disabled={disabled}
             >
               {label}
             </button>
