@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import Map from "./components/Map";
 import "./App.css";
-import { supabase } from "./utils/supabase";
+import { hasSupabaseConfig, supabase } from "./utils/supabase";
 
 // Unique ID for this page load — used as the DB visit_id
 const VISIT_ID = crypto.randomUUID();
@@ -13,6 +13,8 @@ function App() {
   const visitStart = useRef(Date.now());
 
   useEffect(() => {
+    if (!hasSupabaseConfig || !supabase) return;
+
     // Fixed key means whichever module instance fires first blocks all others
     if (sessionStorage.getItem(SESSION_GUARD)) return;
     sessionStorage.setItem(SESSION_GUARD, VISIT_ID);
