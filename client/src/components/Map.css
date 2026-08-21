@@ -146,6 +146,34 @@
   transition: background-color 0.15s ease;
 }
 
+.mode-status {
+  max-width: 240px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 600;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.mode-status-neutral {
+  display: none;
+}
+
+.mode-status-info {
+  background: rgba(228, 241, 255, 0.96);
+  border: 1px solid rgba(91, 143, 191, 0.25);
+  color: #2f5d89;
+}
+
+.mode-status-warning {
+  background: rgba(255, 245, 224, 0.98);
+  border: 1px solid rgba(205, 138, 37, 0.25);
+  color: #8a5a14;
+}
+
 .mode-switcher:hover .mode-switcher-label {
   background-color: rgba(255, 255, 255, 0.85);
 }
