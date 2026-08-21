@@ -33,6 +33,35 @@ const DEFAULT_SNOW_TILE_MANIFEST = {
   minzoom: 4,
   maxzoom: 4,
 };
+const RASTER_TILE_CHECK_URL = (day) => `${SUPABASE_TILES_URL}/day_${String(day).padStart(3, "0")}/4/0/0.png`;
+
+const detectGpuInfo = () => {
+  if (typeof document === "undefined") {
+    return { supported: false, isNvidia: false, renderer: "", vendor: "" };
+  }
+
+  const canvas = document.createElement("canvas");
+  const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+  if (!gl) {
+    return { supported: false, isNvidia: false, renderer: "", vendor: "" };
+  }
+
+  const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+  const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  const vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+  const details = `${vendor ?? ""} ${renderer ?? ""}`.toLowerCase();
+
+  return {
+    supported: true,
+    isNvidia: details.includes("nvidia"),
+    renderer: renderer ? String(renderer) : "",
+    vendor: vendor ? String(vendor) : "",
+  };
+};
+
+const isMobile = /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+  typeof navigator !== "undefined" ? navigator.userAgent : ""
+);
 
 const logTileDataset = (label, payload) => {
   console.log(`[Map Tiles] ${label}`, payload);
@@ -43,6 +72,8 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
   const map = useRef(null);
   const [is3DView, setIs3DView] = useState(false);
   const [mapMode, setMapMode] = useState("gpu");
+  const [modeStatus, setModeStatus] = useState("");
+  const [modeStatusTone, setModeStatusTone] = useState("neutral");
   const [geoTiffLoaded, setGeoTiffLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
@@ -60,6 +91,8 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
   const mapModeRef = useRef(mapMode);
   const viewModeRef = useRef(viewMode);
   const geoTiffLoadedRef = useRef(geoTiffLoaded);
+  const gpuInfoRef = useRef(null);
+  const modeRequestRef = useRef(0);
   useEffect(() => { dayOfYearRef.current = dayOfYear; }, [dayOfYear]);
   useEffect(() => { mapModeRef.current = mapMode; }, [mapMode]);
   useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
@@ -239,6 +272,106 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     });
   };
 
+  const getGpuInfo = () => {
+    if (!gpuInfoRef.current) {
+      gpuInfoRef.current = detectGpuInfo();
+    }
+    return gpuInfoRef.current;
+  };
+
+  const isRasterAvailable = async (day = dayOfYearRef.current) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+
+    try {
+      const response = await fetch(RASTER_TILE_CHECK_URL(day), {
+        method: "GET",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  const resolveRenderMode = async (requestedMode = null) => {
+    const gpuInfo = getGpuInfo();
+
+    if (requestedMode === "cpu") {
+      return { mode: "cpu", status: "", tone: "neutral" };
+    }
+
+    if (requestedMode === "gpu") {
+      if (gpuInfo.isNvidia) return { mode: "gpu", status: "", tone: "neutral" };
+      if (await isRasterAvailable()) {
+        return {
+          mode: "raster",
+          status: "NVIDIA GPU not detected, using Raster Mode.",
+          tone: "info",
+        };
+      }
+      return {
+        mode: "cpu",
+        status: "NVIDIA GPU not detected and Raster Mode is unavailable, using CPU Mode.",
+        tone: "warning",
+      };
+    }
+
+    if (requestedMode === "raster") {
+      if (await isRasterAvailable()) {
+        return { mode: "raster", status: "", tone: "neutral" };
+      }
+      if (gpuInfo.isNvidia) {
+        return {
+          mode: "gpu",
+          status: "Raster Mode is unavailable, using NVIDIA GPU Mode.",
+          tone: "warning",
+        };
+      }
+      return {
+        mode: "cpu",
+        status: "Raster Mode is unavailable and NVIDIA GPU is not detected, using CPU Mode.",
+        tone: "warning",
+      };
+    }
+
+    if (gpuInfo.isNvidia) {
+      return { mode: "gpu", status: "", tone: "neutral" };
+    }
+
+    if (await isRasterAvailable()) {
+      return {
+        mode: "raster",
+        status: "NVIDIA GPU not detected, using Raster Mode.",
+        tone: "info",
+      };
+    }
+
+    return {
+      mode: "cpu",
+      status: "NVIDIA GPU not detected and Raster Mode is unavailable, using CPU Mode.",
+      tone: "warning",
+    };
+  };
+
+  const handleModeSelection = async (requestedMode) => {
+    setModeMenuOpen(false);
+    const requestId = ++modeRequestRef.current;
+    const resolution = await resolveRenderMode(requestedMode);
+
+    if (requestId !== modeRequestRef.current) {
+      return;
+    }
+
+    mapModeRef.current = resolution.mode;
+    setMapMode(resolution.mode);
+    setModeStatus(resolution.status);
+    setModeStatusTone(resolution.tone);
+  };
+
   // Helper function to render GPU tiles for current viewport
   const updateGPUTiles = async (processor, dayOfYear) => {
     if (!processor || !map.current || mapModeRef.current !== "gpu" || viewModeRef.current === "snow") return;
@@ -315,7 +448,7 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
             }, 'state-borders-top');
             activeTiles.current.add(posKey);
           } catch (e) {
-            console.error(`Error adding tile ${sourceId}:`, e);
+            // Error adding tile
           }
         }
       }
@@ -335,7 +468,7 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
       processor.prerenderRange(tileList, dayOfYear);
 
     } catch (e) {
-      console.error("GPU tile rendering failed:", e);
+      // GPU tile rendering failed
     } finally {
       setIsProcessing(false);
     }
@@ -360,7 +493,7 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     try {
       const data = await loadGeoTIFF("/SpringBloom_30yr.tif");
       if (!data) {
-        console.error("GeoTIFF failed to load — CPU/GPU modes unavailable");
+        // GeoTIFF failed to load — CPU/GPU modes unavailable
         return;
       }
 
@@ -380,7 +513,7 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
         processor.loadGeoTIFF(data);
         gpuProcessor.current = processor;
       } else {
-        console.warn("GPU processor init failed — GPU mode unavailable");
+        // GPU processor init failed — GPU mode unavailable
       }
 
       setGeoTiffLoaded(true);
@@ -390,17 +523,28 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
         updateGPUTiles(processor, currentDay);
       }
 
-      console.log("GeoTIFF + processors ready");
+      // GeoTIFF + processors ready
     } catch (e) {
-      console.error("loadGeoTIFFAndInitProcessors failed:", e);
+      // loadGeoTIFFAndInitProcessors failed
     }
   };
 
   const rasterSlotRef = useRef(0); // alternates 0/1 for double-buffering
 
   // Update MapLibre raster tile source using double-buffering to avoid flash
-  const updateRasterTiles = (day) => {
+  const updateRasterTiles = async (day) => {
     if (!map.current) return;
+    const resolution = await resolveRenderMode("raster");
+    if (resolution.mode !== "raster") {
+      if (mapModeRef.current !== resolution.mode) {
+        mapModeRef.current = resolution.mode;
+        setMapMode(resolution.mode);
+      }
+      setModeStatus(resolution.status);
+      setModeStatusTone(resolution.tone);
+      return;
+    }
+
     const dayStr = String(day).padStart(3, '0');
     const tileUrl = `${SUPABASE_TILES_URL}/day_${dayStr}/{z}/{x}/{y}.png`;
 
@@ -431,7 +575,6 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
       tileSize: 256,
       minzoom: 4,
       maxzoom: 4,
-      bounds: [-130, 24, -65, 50], // CONUS only — prevents requests for ocean/Canada tiles
     });
     map.current.addLayer({
       id: newLayerId,
@@ -468,136 +611,150 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
   useEffect(() => {
     if (map.current) return;
 
-    map.current = new maplibregl.Map({
-      container: mapContainer.current,
-      style: "/style.json",
-      center: [-98.5, 39.8],
-      zoom: 3,
-      pitch: 0,
-      bearing: 0,
-      interactive: true,
-      maxBounds: [[-130, 24], [-65, 50]],
-      maxPitch: 85,
-      antialias: true,
-      transformRequest: (url) => {
-        return { url };
-      }
-    });
+    let cancelled = false;
 
-    // Re-render GPU tiles once the map settles (pan or zoom complete)
-    map.current.on("moveend", () => {
-      if (mapModeRef.current === "gpu" && gpuProcessor.current && geoTiffLoadedRef.current && viewModeRef.current !== "snow") {
-        updateGPUTiles(gpuProcessor.current, dayOfYearRef.current);
-      }
-    });
+    const initializeMap = async () => {
+      const preferredMode = await resolveRenderMode();
+      if (cancelled) return;
 
-    map.current.on("load", () => {
-      // Terrain: AWS Terrarium elevation tiles (free, no key, SRTM 30m)
-      map.current.addSource("terrain-dem", {
-        type: "raster-dem",
-        tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
-        tileSize: 256,
-        encoding: "terrarium",
-        maxzoom: 12,
+      mapModeRef.current = preferredMode.mode;
+      setMapMode(preferredMode.mode);
+      setModeStatus(preferredMode.status);
+      setModeStatusTone(preferredMode.tone);
+
+      map.current = new maplibregl.Map({
+        container: mapContainer.current,
+        style: "/style.json",
+        center: [-98.5, 39.8],
+        zoom: 3,
+        pitch: 0,
+        bearing: 0,
+        interactive: true,
+        maxBounds: [[-130, 24], [-65, 50]],
+        maxPitch: 85,
+        antialias: true,
+        transformRequest: (url) => {
+          return { url };
+        }
       });
-      map.current.setTerrain({ source: "terrain-dem", exaggeration: 2.0 });
 
-      // Hide base map layers
-      const style = map.current.getStyle();
-      if (style && style.layers) {
-        style.layers.forEach((layer) => {
-          try {
-            map.current.setLayoutProperty(layer.id, "visibility", "none");
-          } catch {
-            // Ignore errors when hiding layers
-          }
+      // Re-render GPU tiles once the map settles (pan or zoom complete)
+      map.current.on("moveend", () => {
+        if (mapModeRef.current === "gpu" && gpuProcessor.current && geoTiffLoadedRef.current && viewModeRef.current !== "snow") {
+          updateGPUTiles(gpuProcessor.current, dayOfYearRef.current);
+        }
+      });
+
+      map.current.on("load", () => {
+        // Terrain: AWS Terrarium elevation tiles (free, no key, SRTM 30m)
+        map.current.addSource("terrain-dem", {
+          type: "raster-dem",
+          tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+          tileSize: 256,
+          encoding: "terrarium",
+          maxzoom: 12,
         });
-      }
+        map.current.setTerrain({ source: "terrain-dem", exaggeration: 2.0 });
 
-      // Ocean Background
-      map.current.addLayer({
-        id: "ocean-background",
-        type: "background",
-        paint: { "background-color": "#D4E7F5" },
+        // Hide base map layers
+        const style = map.current.getStyle();
+        if (style && style.layers) {
+          style.layers.forEach((layer) => {
+            try {
+              map.current.setLayoutProperty(layer.id, "visibility", "none");
+            } catch {
+              // Ignore errors when hiding layers
+            }
+          });
+        }
+
+        // Ocean Background
+        map.current.addLayer({
+          id: "ocean-background",
+          type: "background",
+          paint: { "background-color": "#D4E7F5" },
+        });
+
+        // State Borders Source (cached locally)
+        map.current.addSource("state-borders", {
+          type: "geojson",
+          data: "/us-states.json"
+        });
+
+        // US Terrain Fill (light tan base)
+        map.current.addLayer({
+          id: "us-terrain",
+          type: "fill",
+          source: "state-borders",
+          paint: { "fill-color": "#E8DCC8", "fill-opacity": 1 },
+        });
+
+        // Hillshading — draws light/shadow on terrain so elevation reads through foliage
+        map.current.addLayer({
+          id: "hillshade",
+          type: "hillshade",
+          source: "terrain-dem",
+          paint: {
+            "hillshade-exaggeration": 0.6,
+            "hillshade-shadow-color": "#3a3a3a",
+            "hillshade-highlight-color": "#ffffff",
+            "hillshade-accent-color": "#5a4a3a",
+            "hillshade-illumination-direction": 335,
+          },
+        });
+
+        // CPU Mode (GeoJSON)
+        map.current.addSource("foliage-cpu", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+          generateId: true
+        });
+
+        map.current.addLayer({
+          id: "foliage-layer-cpu",
+          type: "fill",
+          source: "foliage-cpu",
+          paint: {
+            "fill-color": foliageColors.none,
+            "fill-opacity": 0.65,
+            "fill-antialias": false
+          },
+          layout: { "visibility": preferredMode.mode === "cpu" ? "visible" : "none" }
+        });
+
+        // GPU Mode (Raster Tiles via Image Source)
+        // This will be populated dynamically with rendered canvas tiles
+        // We create it lazily on first GPU tile render, not here
+        // (placeholder would cause rendering issues)
+
+        // State borders on top
+        map.current.addLayer({
+          id: "state-borders-top",
+          type: "line",
+          source: "state-borders",
+          paint: { "line-color": "#666666", "line-width": 1.5 },
+        });
+
+        // If starting in raster mode, show tiles immediately — no GeoTIFF needed
+        if (mapModeRef.current === "raster" && viewModeRef.current !== "snow") {
+          updateRasterTiles(dayOfYearRef.current);
+        }
+
+        updateSnowRasterTiles(snowDate);
+
+        // Load states (always needed for borders), then conditionally load GeoTIFF
+        fetch("/us-states.json").then(res => res.json()).then(states => {
+          statesGeoJSON.current = states;
+          // For CPU/GPU mode load GeoTIFF now; for raster mode load it in background
+          // so switching modes later is fast
+          loadGeoTIFFAndInitProcessors(states, dayOfYearRef.current);
+        }).catch(err => console.error("Failed to load states:", err));
       });
-
-      // State Borders Source (cached locally)
-      map.current.addSource("state-borders", {
-        type: "geojson",
-        data: "/us-states.json"
-      });
-
-      // US Terrain Fill (light tan base)
-      map.current.addLayer({
-        id: "us-terrain",
-        type: "fill",
-        source: "state-borders",
-        paint: { "fill-color": "#E8DCC8", "fill-opacity": 1 },
-      });
-
-      // Hillshading — draws light/shadow on terrain so elevation reads through foliage
-      map.current.addLayer({
-        id: "hillshade",
-        type: "hillshade",
-        source: "terrain-dem",
-        paint: {
-          "hillshade-exaggeration": 0.6,
-          "hillshade-shadow-color": "#3a3a3a",
-          "hillshade-highlight-color": "#ffffff",
-          "hillshade-accent-color": "#5a4a3a",
-          "hillshade-illumination-direction": 335,
-        },
-      });
-
-      // CPU Mode (GeoJSON)
-      map.current.addSource("foliage-cpu", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-        generateId: true
-      });
-
-      map.current.addLayer({
-        id: "foliage-layer-cpu",
-        type: "fill",
-        source: "foliage-cpu",
-        paint: {
-          "fill-color": foliageColors.none,
-          "fill-opacity": 0.65,
-          "fill-antialias": false
-        },
-        layout: { "visibility": mapMode === "cpu" ? "visible" : "none" }
-      });
-
-      // GPU Mode (Raster Tiles via Image Source)
-      // This will be populated dynamically with rendered canvas tiles
-      // We create it lazily on first GPU tile render, not here
-      // (placeholder would cause rendering issues)
-
-      // State borders on top
-      map.current.addLayer({
-        id: "state-borders-top",
-        type: "line",
-        source: "state-borders",
-        paint: { "line-color": "#666666", "line-width": 1.5 },
-      });
-
-      // If starting in raster mode, show tiles immediately — no GeoTIFF needed
-      if (mapModeRef.current === "raster" && viewModeRef.current !== "snow") {
-        updateRasterTiles(dayOfYearRef.current);
-      }
-
-      updateSnowRasterTiles(snowDate);
-
-      // Load states (always needed for borders), then conditionally load GeoTIFF
-      fetch("/us-states.json").then(res => res.json()).then(states => {
-        statesGeoJSON.current = states;
-        // For CPU/GPU mode load GeoTIFF now; for raster mode load it in background
-        // so switching modes later is fast
-        loadGeoTIFFAndInitProcessors(states, dayOfYearRef.current);
-      }).catch(err => console.error("Failed to load states:", err));
-    });
+    };
+    initializeMap();
 
     return () => {
+      cancelled = true;
       if (gpuProcessor.current) {
         gpuProcessor.current.dispose();
       }
@@ -616,9 +773,11 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
       syncOverlayVisibility(viewMode, mapMode);
       if (mapMode === "raster" && viewMode !== "snow") {
         updateRasterTiles(dayOfYearRef.current);
+      } else if ((mapMode === "cpu" || mapMode === "gpu") && !geoTiffLoadedRef.current && statesGeoJSON.current) {
+        loadGeoTIFFAndInitProcessors(statesGeoJSON.current, dayOfYearRef.current);
       }
     } catch (e) {
-      console.log("Layer visibility update error:", e);
+      // Layer visibility update error
     }
   }, [mapMode, viewMode]);
 
@@ -656,7 +815,7 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     } else if (mapMode === "gpu") {
       // GPU mode: render tiles via WebGL
       if (!geoTiffLoaded || !gpuProcessor.current) {
-        console.log("GPU mode waiting for data and processor initialization...");
+        // GPU mode waiting for data and processor initialization...
         return;
       }
       
@@ -702,18 +861,24 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
           {isProcessing && " ⏳"}
         </div>
 
+        {modeStatus && (
+          <div className={`mode-status mode-status-${modeStatusTone}`} aria-live="polite">
+            {modeStatus}
+          </div>
+        )}
+
         {modeMenuOpen && (
           <div className="mode-switcher-panel">
             <div className="mode-panel-title">Render Mode</div>
             {[
-              { id: "cpu",    icon: "🔧", label: "CPU Mode",    desc: "GeoJSON grid, client-side" },
-              { id: "gpu",    icon: "⚡", label: "GPU Mode",    desc: "WebGL tiles, client-side" },
+              { id: "cpu",    icon: "🔧", label: "CPU Mode",    desc: isMobile ? "Not available on mobile" : "GeoJSON grid, client-side" },
+              { id: "gpu",    icon: "⚡", label: "GPU Mode",    desc: isMobile ? "Not available on mobile" : "WebGL tiles, client-side" },
               { id: "raster", icon: "🗺️", label: "Raster Mode", desc: "Pre-rendered, from server" },
             ].map(({ id, icon, label, desc }) => (
               <button
                 key={id}
                 className={`mode-option ${mapMode === id ? "active" : ""}`}
-                onClick={() => { setMapMode(id); setModeMenuOpen(false); }}
+                onClick={() => handleModeSelection(id)}
                 disabled={isProcessing && id !== mapMode}
               >
                 <span className="mode-option-icon">{icon}</span>
@@ -768,7 +933,7 @@ function createFoliageGrid(statesGeoJSON, geoTiffData) {
     });
   }
   
-  console.log(`CPU: Generated ${filteredFeatures.length} foliage features`);
+  // CPU: Generated foliage features
   return { type: "FeatureCollection", features: filteredFeatures };
 }
 
@@ -796,12 +961,12 @@ async function loadGeoTIFF(url) {
     const bb = image.getBoundingBox();
     const bbox = [bb[0], bb[1], bb[2], bb[3]];  // [west, south, east, north]
     
-    console.log(`[GPU] GeoTIFF bounds: W=${bbox[0].toFixed(2)}, S=${bbox[1].toFixed(2)}, E=${bbox[2].toFixed(2)}, N=${bbox[3].toFixed(2)}`);
-    console.log(`[GPU] GeoTIFF metadata: ${image.getWidth()}x${image.getHeight()} pixels`);
+    // [GPU] GeoTIFF bounds
+    // [GPU] GeoTIFF metadata
     
     // Validate bbox makes geographic sense
     if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) {
-      console.warn(`[GPU] WARNING: Invalid bbox detected! W>E or S>N - format may be unexpected!`);
+      // [GPU] WARNING: Invalid bbox detected! W>E or S>N - format may be unexpected!
     }
     
     return {
@@ -811,7 +976,7 @@ async function loadGeoTIFF(url) {
       bbox: bbox,
     };
   } catch (e) {
-    console.error("GeoTIFF loading failed:", e);
+    // GeoTIFF loading failed
     return null;
   }
 }

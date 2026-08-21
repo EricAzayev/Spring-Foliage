@@ -1,6 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Map from "./components/Map";
 import "./App.css";
+import { hasSupabaseConfig, supabase } from "./utils/supabase";
+
+// Unique ID for this page load — used as the DB visit_id
+const VISIT_ID = crypto.randomUUID();
+// Fixed key — same across all module instances in this session
+const SESSION_GUARD = "sfm_view_tracked";
 
 const SPRING_START_DAY = 54;
 const SPRING_END_DAY = 180;
@@ -40,11 +46,59 @@ function App() {
   const [viewMode, setViewMode] = useState("spring");
   const [snapTimelines, setSnapTimelines] = useState(false);
   const [snowDataAvailable, setSnowDataAvailable] = useState(false);
+  const visitStart = useRef(Date.now());
 
   const showSpringTimeline = viewMode === "spring" || viewMode === "combined";
   const showSnowTimeline = viewMode === "snow" || viewMode === "combined";
   const snowDate = AVAILABLE_SNOW_DATES[snowSliderIndex];
   const springDate = getDateFromDayOfYear(snowDate.getFullYear(), springDayOfYear);
+
+  useEffect(() => {
+    if (!hasSupabaseConfig || !supabase) return;
+
+    if (sessionStorage.getItem(SESSION_GUARD)) return;
+    sessionStorage.setItem(SESSION_GUARD, VISIT_ID);
+
+    const rowId = { current: null };
+
+    supabase
+      .from("Views")
+      .insert({
+        project: "Spring Foliage Map",
+        page: "Home",
+        views: 1,
+        visit_id: VISIT_ID,
+        referrer: document.referrer || "direct",
+      })
+      .select("id")
+      .single()
+      .then(({ data, error }) => {
+        if (error) return;
+        rowId.current = data.id;
+      });
+
+    const handleUnload = () => {
+      if (!rowId.current) return;
+      const seconds = Math.round((Date.now() - visitStart.current) / 1000);
+      const baseUrl = (import.meta.env.VITE_SUPABASE_URL || "")
+        .replace(/\/rest\/v1\/?$/, "")
+        .replace(/\/$/, "");
+
+      fetch(`${baseUrl}/rest/v1/Views?id=eq.${rowId.current}`, {
+        method: "PATCH",
+        keepalive: true,
+        headers: {
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ time_on_page: seconds }),
+      });
+    };
+
+    window.addEventListener("beforeunload", handleUnload);
+    return () => window.removeEventListener("beforeunload", handleUnload);
+  }, []);
 
   useEffect(() => {
     let isActive = true;

@@ -136,7 +136,6 @@ class RasterTileProcessor {
       });
 
       if (!this.gl) {
-        console.warn("WebGL not supported");
         return false;
       }
 
@@ -153,7 +152,6 @@ class RasterTileProcessor {
       this.gl.linkProgram(this.program);
 
       if (!this.gl.getProgramParameter(this.program, this.gl.LINK_STATUS)) {
-        console.error("Program link error:", this.gl.getProgramInfoLog(this.program));
         return false;
       }
 
@@ -167,7 +165,6 @@ class RasterTileProcessor {
         tileBbox:      this.gl.getUniformLocation(this.program, 'tileBbox'),
         dayOfYear:     this.gl.getUniformLocation(this.program, 'dayOfYear'),
       };
-
       // Set up framebuffer for tile rendering
       this.colorTexture = this.gl.createTexture();
       this.gl.bindTexture(this.gl.TEXTURE_2D, this.colorTexture);
@@ -199,9 +196,9 @@ class RasterTileProcessor {
         this.gl.checkFramebufferStatus(this.gl.FRAMEBUFFER) !==
         this.gl.FRAMEBUFFER_COMPLETE
       ) {
-        console.warn("Framebuffer incomplete");
         return false;
       }
+
 
       // Set up full-screen quad
       const posBuffer = this.gl.createBuffer();
@@ -213,6 +210,7 @@ class RasterTileProcessor {
         this.gl.STATIC_DRAW
       );
 
+      // Restore correct attribute location setup
       const posLocation = this.gl.getAttribLocation(this.program, "position");
       this.gl.enableVertexAttribArray(posLocation);
       this.gl.vertexAttribPointer(posLocation, 2, this.gl.FLOAT, false, 0, 0);
@@ -221,10 +219,8 @@ class RasterTileProcessor {
       this.gl.clearColor(0, 0, 0, 0);
 
       this.initialized = true;
-      console.log("Raster tile processor initialized");
       return true;
     } catch (e) {
-      console.error("Raster tile processor init failed:", e);
       return false;
     }
   }
@@ -235,17 +231,17 @@ class RasterTileProcessor {
     this.gl.compileShader(shader);
 
     if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-      console.error(
+        // Raster tile processor initialized
         "Shader error:",
         this.gl.getShaderInfoLog(shader)
-      );
+        // Raster tile processor init failed
       return null;
     }
     return shader;
   }
 
   /**
-   * Load GeoTIFF data for sampling
+        // Tile processor not ready
    */
   loadGeoTIFF(geoTiffData) {
     this.geoTiffData = geoTiffData;
@@ -260,8 +256,6 @@ class RasterTileProcessor {
         count++;
       }
     }
-    console.log(`[GPU] GeoTIFF loaded: ${width}x${height}, ${count} non-zero values, range [${minVal}, ${maxVal}]`);
-
     // Encode raw bloom day into texture: 0 = no data, 1-255 = day mapped across 1-365
     // This preserves the ability to detect invalid/ocean pixels in the shader
     const rgbaData = new Uint8Array(width * height * 4);
@@ -303,17 +297,7 @@ class RasterTileProcessor {
       rgbaData
     );
 
-    console.log(`[GPU] Texture uploaded successfully (RGBA format), data length=${rgbaData.length} bytes`);
-    
-    // Debug: sample a few pixels to verify encoding
-    const samplePixels = [0, Math.floor(width*height/2), width*height-1];
-    console.log("[GPU] Sample texture values (R channel = encoded bloom day):");
-    for (const idx of samplePixels) {
-      const origVal = rasterData[idx];
-      const uploadedVal = rgbaData[idx * 4];
-      const decoded = uploadedVal > 0 ? Math.round(((uploadedVal - 1) / 254.0) * 365) : 0;
-      console.log(`  Pixel ${idx}: Original=${origVal}, Encoded=${uploadedVal}, Decoded=${decoded}`);
-    }
+
   }
 
   /**
@@ -329,7 +313,6 @@ class RasterTileProcessor {
 
   async generateTile(z, x, y, dayOfYear) {
     if (!this.initialized || !this.geoTiffData) {
-      console.warn("Tile processor not ready");
       return null;
     }
 
@@ -375,7 +358,7 @@ class RasterTileProcessor {
     resultCanvas.height = TILE_SIZE;
     const ctx = resultCanvas.getContext("2d");
     const imageData = ctx.createImageData(TILE_SIZE, TILE_SIZE);
-    
+
     // Flip Y axis: readPixels is bottom-up, canvas needs top-down
     for (let py = 0; py < TILE_SIZE; py++) {
       for (let px = 0; px < TILE_SIZE; px++) {

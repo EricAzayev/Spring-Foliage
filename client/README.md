@@ -57,6 +57,18 @@ npm run dev
 
 ## Development Setup
 
+### Environment Variables
+
+Frontend analytics are optional. If you want to enable Supabase-backed page tracking,
+create a `client/.env` file with:
+
+```bash
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+
+If these variables are missing, the app will still run and analytics will stay disabled.
+
 ### Install Dependencies
 ```bash
 npm install
