@@ -19,6 +19,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -32,41 +33,37 @@ load_dotenv(dotenv_path=_REPO_ROOT / ".env")
 load_dotenv()
 
 # Match spring script config block exactly
-UPLOAD_TO_SUPABASE = True
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "snow_tiles")
-from urllib.parse import urlparse as _urlparse
 _raw_url = os.environ.get("SUPABASE_URL", "")
-_parsed = _urlparse(_raw_url)
+_parsed = urlparse(_raw_url)
 SUPABASE_URL = f"{_parsed.scheme}://{_parsed.netloc}"  # strip any /rest/v1 path suffix
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 DEFAULT_TILES_DIR = _REPO_ROOT / "client" / "public" / "snow_tiles"
 
 
-def upload_tile_to_supabase(storage_path, png_bytes):
-    """Upload a tile PNG directly via Supabase Storage REST API.
-    Copied verbatim from generate_tiles_gpu_gridded.py."""
+def upload_file_to_supabase(storage_path, content, content_type):
+    """Upload a file directly via the Supabase Storage REST API."""
     url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{storage_path}"
     headers = {
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
         "apikey": SUPABASE_SERVICE_KEY,
-        "Content-Type": "image/png",
+        "Content-Type": content_type,
         "x-upsert": "true",
     }
-    resp = requests.post(url, headers=headers, data=png_bytes, timeout=30)
+    resp = requests.post(url, headers=headers, data=content, timeout=30)
     if resp.status_code not in (200, 201):
-        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
+        raise RuntimeError(
+            f"Supabase upload failed for {storage_path}: "
+            f"HTTP {resp.status_code}: {resp.text}"
+        )
 
 
 def upload_tile(tile_path, tiles_dir):
     """Read a tile from disk and upload it. Mirrors save_tile() in spring script."""
     storage_path = tile_path.relative_to(tiles_dir).as_posix()
     png_bytes = tile_path.read_bytes()
-    if UPLOAD_TO_SUPABASE:
-        try:
-            upload_tile_to_supabase(storage_path, png_bytes)
-        except Exception as e:
-            print(f"Supabase upload failed for {storage_path}: {e}")
+    upload_file_to_supabase(storage_path, png_bytes, "image/png")
 
 
 def upload_date(date_dir, tiles_dir):
@@ -118,6 +115,10 @@ def main():
     if not tiles_dir.exists():
         sys.exit(f"Tiles directory not found: {tiles_dir}")
 
+    manifest_path = tiles_dir / "index.json"
+    if not manifest_path.is_file():
+        sys.exit(f"Snow tile manifest not found: {manifest_path}")
+
     date_dirs = sorted(d for d in tiles_dir.iterdir() if d.is_dir() and d.name.isdigit())
     total_tiles = sum(len(list(d.rglob("*.png"))) for d in date_dirs)
 
@@ -126,6 +127,7 @@ def main():
     print(f"Tiles dir  : {tiles_dir}")
     print(f"Dates      : {len(date_dirs)}")
     print(f"Total tiles: {total_tiles:,}")
+    print(f"Manifest   : {manifest_path}")
 
     if args.dry_run:
         print("\nDRY RUN - no uploads will be performed")
@@ -138,6 +140,11 @@ def main():
     for date_dir in date_dirs:
         upload_date(date_dir, tiles_dir)
 
+    upload_file_to_supabase(
+        "index.json",
+        manifest_path.read_bytes(),
+        "application/json",
+    )
     print("\nDone. Migration complete!")
 
 

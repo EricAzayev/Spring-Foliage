@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Map from "./components/Map";
 import "./App.css";
 import { hasSupabaseConfig, supabase } from "./utils/supabase";
+import { SUPABASE_SNOW_MANIFEST_URL } from "./utils/snowTiles";
 
 // Unique ID for this page load — used as the DB visit_id
 const VISIT_ID = crypto.randomUUID();
@@ -105,7 +106,7 @@ function App() {
 
     const checkSnowAvailability = async () => {
       try {
-        const response = await fetch("/snow_tiles/index.json", { cache: "no-store" });
+        const response = await fetch(SUPABASE_SNOW_MANIFEST_URL, { cache: "no-store" });
         if (!response.ok) {
           if (isActive) setSnowDataAvailable(false);
           return;

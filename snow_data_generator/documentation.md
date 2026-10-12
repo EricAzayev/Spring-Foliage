@@ -3,7 +3,7 @@ Snow depth interpolation pipeline
 We use daily station observations and elevate them into continuous regional rasters with regression kriging (RK), constrained to CONUS and rendered over hillshade.
 
 Implementation file:
-- snow_data_extraction/build_daily_snow_surfaces.py
+- snow_data_generator/build_daily_snow_surfaces.py
 
 Method implemented
 
@@ -37,20 +37,29 @@ Method implemented
   - #4E1D7D: deepest accumulation
 
 Outputs
-- Rasters: snow_data_extraction/output/rasters/snowdepth_YYYYMMDD.tif
-- Visual overlays: snow_data_extraction/output/visualizations/snowdepth_YYYYMMDD_overlay.png
+- Rasters: snow_data_generator/output/rasters/snowdepth_YYYYMMDD.tif
+- Visual overlays: snow_data_generator/output/visualizations/snowdepth_YYYYMMDD_overlay.png
 - Frontend tile pyramids: client/public/snow_tiles/YYYYMMDD/{z}/{x}/{y}.png
 
 Run
 
 1. Install dependencies:
-	pip install -r snow_data_extraction/requirements.txt
+	pip install -r snow_data_generator/requirements.txt
 
 2. Execute:
-	python3 snow_data_extraction/build_daily_snow_surfaces.py
+	python3 snow_data_generator/build_daily_snow_surfaces.py
 
 3. Generate frontend tiles from the interpolated rasters:
-  python3 snow_data_extraction/generate_snow_tiles.py
+  python3 snow_data_generator/generate_snow_tiles.py
+
+4. Publish the generated tiles and date manifest to Supabase Storage:
+  python3 snow_data_generator/migrate_to_supabase.py
+
+The migration requires `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` in
+`snow_data_generator/.env` (or the repository root `.env`). It uploads each
+date's tiles first and publishes `index.json` last, so the frontend only
+advertises dates after their tiles have uploaded successfully. Keep the service
+key out of source control.
 
 Optional arguments
 - --resolution-m 1000 for 1 km grids.
@@ -58,5 +67,4 @@ Optional arguments
 - --station-dir /path/to/snow_files
 - --states-geojson /path/to/us-states.json
 - --min-zoom / --max-zoom in generate_snow_tiles.py to control tile pyramid depth.
-
 

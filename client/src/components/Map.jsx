@@ -4,6 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import * as turf from "@turf/turf";
 import * as GeoTIFF from "geotiff";
 import RasterTileProcessor from "../utils/rasterTileProcessor.js";
+import { SUPABASE_SNOW_MANIFEST_URL, SUPABASE_SNOW_TILES_URL } from "../utils/snowTiles.js";
 import "./Map.css";
 
 // Helper functions for tile coordinate conversion (Web Mercator)
@@ -24,7 +25,6 @@ const tileBounds = (tile) => {
 };
 
 const SUPABASE_TILES_URL = "https://hsuqpowsxssezkbpkrwk.supabase.co/storage/v1/object/public/tiles";
-const SUPABASE_SNOW_TILES_URL = "https://hsuqpowsxssezkbpkrwk.supabase.co/storage/v1/object/public/snow_tiles";
 const BASE_TERRAIN_COLOR = "#E8DCC8";
 const SNOW_ONLY_TERRAIN_COLOR = "#6B5137";
 const SNOW_TILES_URL_PREFIX = SUPABASE_SNOW_TILES_URL;
@@ -123,7 +123,7 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     if (snowTileManifestRef.current) return snowTileManifestRef.current;
 
     try {
-      const response = await fetch("/snow_tiles/index.json", { cache: "no-store" });
+      const response = await fetch(SUPABASE_SNOW_MANIFEST_URL, { cache: "no-store" });
       if (!response.ok) {
         snowTileManifestRef.current = DEFAULT_SNOW_TILE_MANIFEST;
         return snowTileManifestRef.current;

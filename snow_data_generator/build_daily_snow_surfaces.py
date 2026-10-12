@@ -371,13 +371,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--out-raster-dir",
         type=Path,
-        default=Path("snow_data_extraction/output/rasters"),
+        default=Path("snow_data_generator/output/rasters"),
         help="Output directory for daily GeoTIFF rasters.",
     )
     p.add_argument(
         "--out-png-dir",
         type=Path,
-        default=Path("snow_data_extraction/output/visualizations"),
+        default=Path("snow_data_generator/output/visualizations"),
         help="Output directory for hillshade-overlay PNG renders.",
     )
     return p
