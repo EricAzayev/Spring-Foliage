@@ -1,0 +1,34 @@
+name: Keep Supabase Active
+
+on:
+  schedule:
+    # Twice a week. Free-tier Supabase pauses after 1 week of inactivity, so two
+    # pings leaves room for GitHub-side cron drift (cron can run a few minutes late).
+    - cron: "0 7 * * 2" # 07:00 UTC every Tuesday
+    - cron: "0 7 * * 5" # 07:00 UTC every Friday
+  workflow_dispatch: {} # manual trigger from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase storage endpoints
+        run: |
+          BASE="https://hsuqpowsxssezkbpkrwk.supabase.co"
+          URLS=(
+            "$BASE/storage/v1/object/public/tiles/index.json"
+            "$BASE/storage/v1/object/public/snow_tiles/index.json"
+          )
+
+          # What matters is that requests reach the project (keeping it active);
+          # a 404 for a missing manifest still counts as API activity, so only
+          # fail when nothing responds at all.
+          seen_response=0
+          for url in "${URLS[@]}"; do
+            status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 "$url" || echo "ERR")
+            echo "$status  $url"
+            if [[ "$status" != "ERR" ]]; then
+              seen_response=1
+            fi
+          done
+          exit $((1 - seen_response))
