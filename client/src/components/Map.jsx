@@ -33,7 +33,9 @@ const DEFAULT_SNOW_TILE_MANIFEST = {
   minzoom: 4,
   maxzoom: 4,
 };
-const RASTER_TILE_CHECK_URL = (day) => `${SUPABASE_TILES_URL}/day_${String(day).padStart(3, "0")}/4/0/0.png`;
+// z4 tile x=4,y=5 sits at the CONUS interior, so it exists for every day the
+// tile generator ran for (it only covers the CONUS bbox). x=0,y=0 never does.
+const RASTER_TILE_CHECK_URL = (day) => `${SUPABASE_TILES_URL}/day_${String(day).padStart(3, "0")}/4/4/5.png`;
 
 const detectGpuInfo = () => {
   if (typeof document === "undefined") {
