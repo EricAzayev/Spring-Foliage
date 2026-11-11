@@ -16,7 +16,7 @@ jobs:
         run: |
           BASE="https://hsuqpowsxssezkbpkrwk.supabase.co"
           URLS=(
-            "$BASE/storage/v1/object/public/tiles/index.json"
+            "$BASE/storage/v1/object/public/tiles/day_153/4/4/5.png"
             "$BASE/storage/v1/object/public/snow_tiles/index.json"
           )
 
