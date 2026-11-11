@@ -87,6 +87,8 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
   const activeTiles = useRef(new Set()); // Track rendered tile positions (z-x-y)
   const renderGenRef = useRef(0);          // Generation counter to cancel stale renders
   const snowRasterSlotRef = useRef(0);
+  const snowRasterEpochRef = useRef(0);   // cancel stale snow tile updates
+  const terrainEnabledRef = useRef(false);
   const snowTileManifestRef = useRef(null);
   const snowWarningShownRef = useRef(false);
   const dayOfYearRef = useRef(dayOfYear);
@@ -176,51 +178,61 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
       availableDates: manifest.dates.length,
     });
 
+    // Double-buffered persistent slots with an epoch guard: fast snow-date
+    // changes must never interleave (stale idle handlers racing each other
+    // could remove a layer the next update just added, leaving opacity at 0).
+    // setTiles keeps MapLibre's tile cache, so revisited dates load instantly.
+    const epoch = ++snowRasterEpochRef.current;
     const newSlot = snowRasterSlotRef.current === 0 ? 1 : 0;
     const newSourceId = `snow-raster-${newSlot}`;
     const newLayerId = `snow-raster-layer-${newSlot}`;
-    const oldSourceId = `snow-raster-${snowRasterSlotRef.current}`;
     const oldLayerId = `snow-raster-layer-${snowRasterSlotRef.current}`;
+    const layerVisible = viewModeRef.current !== "spring";
 
-    if (map.current.getSource(newSourceId)) {
-      if (map.current.getLayer(newLayerId)) map.current.removeLayer(newLayerId);
-      map.current.removeSource(newSourceId);
+    const existingSource = map.current.getSource(newSourceId);
+    if (existingSource) {
+      existingSource.setTiles([tileUrl]);
+      if (map.current.getLayer(newLayerId)) {
+        map.current.setLayoutProperty(newLayerId, "visibility", layerVisible ? "visible" : "none");
+      }
+    } else {
+      map.current.addSource(newSourceId, {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: 256,
+        minzoom: manifest.minzoom,
+        maxzoom: manifest.maxzoom,
+        bounds: [-130, 24, -65, 50],
+      });
     }
-
-    map.current.addSource(newSourceId, {
-      type: "raster",
-      tiles: [tileUrl],
-      tileSize: 256,
-      minzoom: manifest.minzoom,
-      maxzoom: manifest.maxzoom,
-      bounds: [-130, 24, -65, 50],
-    });
-
-    map.current.addLayer({
-      id: newLayerId,
-      type: "raster",
-      source: newSourceId,
-      paint: {
-        "raster-opacity": 0,
-        "raster-opacity-transition": { duration: 250, delay: 0 },
-      },
-      layout: {
-        visibility: viewModeRef.current === "spring" ? "none" : "visible",
-      },
-    }, "state-borders-top");
+    if (!map.current.getLayer(newLayerId)) {
+      map.current.addLayer({
+        id: newLayerId,
+        type: "raster",
+        source: newSourceId,
+        paint: {
+          "raster-opacity": 0,
+          "raster-opacity-transition": { duration: 250, delay: 0 },
+        },
+        layout: {
+          visibility: layerVisible ? "visible" : "none",
+        },
+      }, "state-borders-top");
+    }
 
     snowRasterSlotRef.current = newSlot;
 
-    const onIdle = () => {
-      map.current.off("idle", onIdle);
+    // Fade on this source's own load state, not map "idle" (terrain can keep
+    // the map non-idle indefinitely — see fadeWhenSourceLoaded).
+    fadeWhenSourceLoaded(newSourceId, () => {
+      if (snowRasterEpochRef.current !== epoch) return;
       if (!map.current.getLayer(newLayerId)) return;
+      if (map.current.getLayer(oldLayerId)) {
+        map.current.setPaintProperty(oldLayerId, "raster-opacity", 0);
+      }
       map.current.setPaintProperty(newLayerId, "raster-opacity", 0.78);
-      setTimeout(() => {
-        if (map.current.getLayer(oldLayerId)) map.current.removeLayer(oldLayerId);
-        if (map.current.getSource(oldSourceId)) map.current.removeSource(oldSourceId);
-      }, 300);
-    };
-    map.current.on("idle", onIdle);
+      map.current.triggerRepaint();
+    });
   };
 
   const syncOverlayVisibility = (nextViewMode = viewMode, nextMapMode = mapMode) => {
@@ -532,21 +544,50 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
   };
 
   const rasterSlotRef = useRef(0); // alternates 0/1 for double-buffering
+  const rasterEpochRef = useRef(0); // cancel stale raster updates
+
+  // Run `apply` once a raster source finishes loading (or after a grace
+  // timeout). Uses the source's own "sourcedata" state rather than the map's
+  // global "idle" event, which can stay pending forever when terrain
+  // (raster-dem) is enabled — leaving updates stuck at opacity 0.
+  const fadeWhenSourceLoaded = (sourceId, apply) => {
+    if (!map.current) { apply(); return; }
+    const onData = (e) => {
+      if (e.sourceId !== sourceId || !e.isSourceLoaded) return;
+      map.current.off("sourcedata", onData);
+      clearTimeout(grace);
+      apply();
+    };
+    map.current.on("sourcedata", onData);
+    // Apply early (opacity transition handles a not-yet-loaded source
+    // gracefully — tiles appear as they land), and let onData also catch
+    // late loads on slow connections (apply is idempotent).
+    const grace = setTimeout(apply, 1500);
+  };
 
   // Update MapLibre raster tile source using double-buffering to avoid flash
   const updateRasterTiles = async (day) => {
     if (!map.current) return;
-    const resolution = await resolveRenderMode("raster");
-    if (resolution.mode !== "raster") {
-      if (mapModeRef.current !== resolution.mode) {
-        mapModeRef.current = resolution.mode;
-        setMapMode(resolution.mode);
+    // Probe availability only while raster mode isn't active yet. Probing on
+    // every update adds a network round-trip per scroll step, which made the
+    // scroller lag behind the UI (GPU mode has no equivalent hop).
+    if (mapModeRef.current !== "raster") {
+      const resolution = await resolveRenderMode("raster");
+      if (resolution.mode !== "raster") {
+        if (mapModeRef.current !== resolution.mode) {
+          mapModeRef.current = resolution.mode;
+          setMapMode(resolution.mode);
+        }
+        setModeStatus(resolution.status);
+        setModeStatusTone(resolution.tone);
+        return;
       }
-      setModeStatus(resolution.status);
-      setModeStatusTone(resolution.tone);
-      return;
     }
 
+    // Epoch guard: fast scrolling (drag, arrow keys) can stack up updates;
+    // only the newest one may fade in. Superseded handlers bow out instead of
+    // racing each other and leaving the map stuck at opacity 0.
+    const epoch = ++rasterEpochRef.current;
     const dayStr = String(day).padStart(3, '0');
     const tileUrl = `${SUPABASE_TILES_URL}/day_${dayStr}/{z}/{x}/{y}.png`;
 
@@ -559,53 +600,65 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
       maxzoom: 4,
     });
 
-    // Alternate between two slots so the old layer stays visible while the new one loads
+    // Double-buffered persistent slots: swap the day on the back buffer via
+    // setTiles (keeps MapLibre's tile cache, so revisited days load instantly)
+    // while the front buffer stays visible, then fade across.
     const newSlot = rasterSlotRef.current === 0 ? 1 : 0;
     const newSourceId = `foliage-raster-${newSlot}`;
     const newLayerId  = `foliage-layer-raster-${newSlot}`;
-    const oldSourceId = `foliage-raster-${rasterSlotRef.current}`;
     const oldLayerId  = `foliage-layer-raster-${rasterSlotRef.current}`;
+    const layerVisible = viewModeRef.current !== "snow" && mapModeRef.current === "raster";
 
-    // Add new source + layer (initially transparent)
-    if (map.current.getSource(newSourceId)) {
-      if (map.current.getLayer(newLayerId)) map.current.removeLayer(newLayerId);
-      map.current.removeSource(newSourceId);
+    const existingSource = map.current.getSource(newSourceId);
+    if (existingSource) {
+      existingSource.setTiles([tileUrl]);
+      if (map.current.getLayer(newLayerId)) {
+        map.current.setLayoutProperty(newLayerId, "visibility", layerVisible ? "visible" : "none");
+      }
+    } else {
+      map.current.addSource(newSourceId, {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: 256,
+        minzoom: 4,
+        maxzoom: 4,
+      });
     }
-    map.current.addSource(newSourceId, {
-      type: "raster",
-      tiles: [tileUrl],
-      tileSize: 256,
-      minzoom: 4,
-      maxzoom: 4,
-    });
-    map.current.addLayer({
-      id: newLayerId,
-      type: "raster",
-      source: newSourceId,
-      paint: {
-        "raster-opacity": 0,
-        "raster-opacity-transition": { duration: 200, delay: 0 },
-      },
-      layout: {
-        visibility: viewModeRef.current === "snow" || mapModeRef.current !== "raster" ? "none" : "visible",
-      },
-    }, "state-borders-top");
+    if (!map.current.getLayer(newLayerId)) {
+      map.current.addLayer({
+        id: newLayerId,
+        type: "raster",
+        source: newSourceId,
+        paint: {
+          "raster-opacity": 0,
+          "raster-opacity-transition": { duration: 200, delay: 0 },
+        },
+        layout: {
+          visibility: layerVisible ? "visible" : "none",
+        },
+      }, "state-borders-top");
+    }
 
     rasterSlotRef.current = newSlot;
 
-    // Once the new tiles are loaded, fade in and remove the old layer
-    const onIdle = () => {
-      map.current.off("idle", onIdle);
+    rasterSlotRef.current = newSlot;
+
+    // Once the new day's tiles are loaded, fade in and dim the old slot.
+    // Don't rely on the map's global "idle" event: with terrain (raster-dem)
+    // enabled the map can stay non-idle indefinitely, which left the new
+    // layer stuck at opacity 0 until the user happened to interact.
+    fadeWhenSourceLoaded(newSourceId, () => {
+      if (rasterEpochRef.current !== epoch) return;
       if (!map.current.getLayer(newLayerId)) return;
-      // Fade in new layer
+      if (map.current.getLayer(oldLayerId)) {
+        map.current.setPaintProperty(oldLayerId, "raster-opacity", 0);
+      }
       map.current.setPaintProperty(newLayerId, "raster-opacity", 0.65);
-      // Remove old layer after the fade (200ms matches transition)
-      setTimeout(() => {
-        if (map.current.getLayer(oldLayerId))  map.current.removeLayer(oldLayerId);
-        if (map.current.getSource(oldSourceId)) map.current.removeSource(oldSourceId);
-      }, 250);
-    };
-    map.current.on("idle", onIdle);
+      // Terrain-draped raster layers can miss their repaint when faded in
+      // between frames — force one so cold-start paint isn't dependent on a
+      // later camera event.
+      map.current.triggerRepaint();
+    });
   };
 
   // Main map initialization - set up once on component mount
