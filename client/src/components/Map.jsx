@@ -472,6 +472,11 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
         }
       }
 
+      // Terrain-draped image layers can miss their first rasterization when
+      // added between frames — force a repaint so the cold-start render
+      // doesn't depend on the user's first camera event.
+      map.current.triggerRepaint();
+
       // Kick off idle pre-render of adjacent days so future slider moves are instant
       processor.prerenderRange(tileList, dayOfYear);
 
@@ -488,6 +493,14 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     const newIs3D = !is3DView;
     setIs3DView(newIs3D);
     if (newIs3D) {
+      // Terrain draping (setTerrain) is only needed for the pitched 3D view.
+      // At startup the map stays flat: without it, raster/image layers aren't
+      // DEM-draped (no first-drape repaint quirk) and the map's "idle" event
+      // fires normally. Hillshade still renders from the DEM source itself.
+      if (!terrainEnabledRef.current) {
+        map.current.setTerrain({ source: "terrain-dem", exaggeration: 2.0 });
+        terrainEnabledRef.current = true;
+      }
       map.current.easeTo({ pitch: 60, bearing: -20, zoom: 4.5, duration: 1000 });
     } else {
       map.current.easeTo({ pitch: 0, bearing: 0, zoom: 3, duration: 1000 });
@@ -702,8 +715,13 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
           tileSize: 256,
           encoding: "terrarium",
           maxzoom: 12,
+          // Keep DEM/hillshade inside North America — stops the gray hillshade
+          // smear the renderer draws on the ocean at the world's edge
+          bounds: [-170, 15, -50, 75],
         });
-        map.current.setTerrain({ source: "terrain-dem", exaggeration: 2.0 });
+        // NOTE: setTerrain is intentionally NOT called here — startup stays
+        // flat so the first GPU/raster paint isn't a terrain-drape render.
+        // Terrain engages when the user first toggles the 3D view.
 
         // Hide base map layers
         const style = map.current.getStyle();
