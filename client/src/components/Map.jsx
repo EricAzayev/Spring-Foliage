@@ -676,7 +676,18 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     let cancelled = false;
 
     const initializeMap = async () => {
-      const preferredMode = await resolveRenderMode();
+      // CONUS extent + a small margin, so the tips (Maine east, Florida south)
+      // fit and labels aren't clipped. The most-zoomed-out view fits exactly
+      // this region and panning/zooming out can't go past it. The south edge
+      // stays above lat ~21.94° so a tall viewport never requests the
+      // never-generated z4 tile row y7 (0–21.9°N) at startup.
+      const CONUS_BOUNDS = [[-127.5, 23.5], [-61, 52.5]];
+      // Raster is the default startup mode unconditionally: most visitors are
+      // on mobile or devices without a useful WebGL GPU string, raster needs
+      // no GeoTIFF download/decode, and its tiles come from the CDN. GPU mode
+      // stays one click away in the modes menu (it lazy-loads the GeoTIFF on
+      // demand). No network round-trip gates map creation.
+      const preferredMode = { mode: "raster", status: "", tone: "neutral" };
       if (cancelled) return;
 
       mapModeRef.current = preferredMode.mode;
@@ -692,12 +703,18 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
         pitch: 0,
         bearing: 0,
         interactive: true,
-        maxBounds: [[-130, 24], [-65, 50]],
+        maxBounds: CONUS_BOUNDS,
         maxPitch: 85,
         antialias: true,
         transformRequest: (url) => {
           return { url };
         }
+      });
+
+      // Snap the initial view to the full-US fit (overrides the fixed zoom
+      // above, whose fit depends on viewport size — this doesn't).
+      map.current.on("load", () => {
+        map.current.fitBounds(CONUS_BOUNDS, { padding: 0, duration: 0 });
       });
 
       // Re-render GPU tiles once the map settles (pan or zoom complete)
