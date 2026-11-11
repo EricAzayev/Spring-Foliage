@@ -4,7 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import * as turf from "@turf/turf";
 import * as GeoTIFF from "geotiff";
 import RasterTileProcessor from "../utils/rasterTileProcessor.js";
-import { SUPABASE_SNOW_MANIFEST_URL, SUPABASE_SNOW_TILES_URL } from "../utils/snowTiles.js";
+import { SUPABASE_SNOW_TILES_URL, fetchSnowTileManifest } from "../utils/snowTiles.js";
 import "./Map.css";
 
 // Helper functions for tile coordinate conversion (Web Mercator)
@@ -127,13 +127,7 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
     if (snowTileManifestRef.current) return snowTileManifestRef.current;
 
     try {
-      const response = await fetch(SUPABASE_SNOW_MANIFEST_URL, { cache: "no-store" });
-      if (!response.ok) {
-        snowTileManifestRef.current = DEFAULT_SNOW_TILE_MANIFEST;
-        return snowTileManifestRef.current;
-      }
-
-      const manifest = await response.json();
+      const manifest = await fetchSnowTileManifest();
       snowTileManifestRef.current = {
         dates: Array.isArray(manifest.dates) ? manifest.dates : [],
         minzoom: Number.isFinite(manifest.minzoom) ? manifest.minzoom : DEFAULT_SNOW_TILE_MANIFEST.minzoom,
@@ -797,12 +791,16 @@ const Map = ({ dayOfYear, viewMode, snowDate }) => {
 
         updateSnowRasterTiles(snowDate);
 
-        // Load states (always needed for borders), then conditionally load GeoTIFF
+        // Load states (always needed for borders). The GeoTIFF is loaded
+        // lazily: it's only required for cpu/gpu rendering, so raster-only
+        // startups skip the ~3MB download + main-thread decode entirely.
+        // Switching to cpu/gpu later triggers the load on demand (see the
+        // mapMode effect), so the tradeoff is a slower first mode switch.
         fetch("/us-states.json").then(res => res.json()).then(states => {
           statesGeoJSON.current = states;
-          // For CPU/GPU mode load GeoTIFF now; for raster mode load it in background
-          // so switching modes later is fast
-          loadGeoTIFFAndInitProcessors(states, dayOfYearRef.current);
+          if (mapModeRef.current === "cpu" || mapModeRef.current === "gpu") {
+            loadGeoTIFFAndInitProcessors(states, dayOfYearRef.current);
+          }
         }).catch(err => console.error("Failed to load states:", err));
       });
     };

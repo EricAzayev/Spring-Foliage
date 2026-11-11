@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Map from "./components/Map";
 import "./App.css";
 import { hasSupabaseConfig, supabase } from "./utils/supabase";
-import { SUPABASE_SNOW_MANIFEST_URL } from "./utils/snowTiles";
+import { fetchSnowTileManifest } from "./utils/snowTiles";
 
 // Unique ID for this page load — used as the DB visit_id
 const VISIT_ID = crypto.randomUUID();
@@ -48,6 +48,10 @@ function App() {
   const [snapTimelines, setSnapTimelines] = useState(false);
   const [snowDataAvailable, setSnowDataAvailable] = useState(false);
   const visitStart = useRef(Date.now());
+  // Focusing the range input on any panel click lets left/right arrow keys
+  // move the timeline without aiming at the small slider thumb
+  const springSliderRef = useRef(null);
+  const snowSliderRef = useRef(null);
 
   const showSpringTimeline = viewMode === "spring" || viewMode === "combined";
   const showSnowTimeline = viewMode === "snow" || viewMode === "combined";
@@ -106,13 +110,7 @@ function App() {
 
     const checkSnowAvailability = async () => {
       try {
-        const response = await fetch(SUPABASE_SNOW_MANIFEST_URL, { cache: "no-store" });
-        if (!response.ok) {
-          if (isActive) setSnowDataAvailable(false);
-          return;
-        }
-
-        const manifest = await response.json();
+        const manifest = await fetchSnowTileManifest();
         const normalizedManifest = {
           dates: Array.isArray(manifest?.dates) ? manifest.dates : DEFAULT_SNOW_MANIFEST.dates,
         };
@@ -260,7 +258,7 @@ function App() {
         )}
 
         {showSpringTimeline && (
-          <section className="timeline-panel">
+          <section className="timeline-panel" onClick={() => springSliderRef.current?.focus()}>
             <div className="timeline-header">
               <span className="timeline-label">Spring foliage timeline</span>
               <div className="date-display">
@@ -268,6 +266,7 @@ function App() {
               </div>
             </div>
             <input
+              ref={springSliderRef}
               type="range"
               min={String(SPRING_START_DAY)}
               max={String(SPRING_END_DAY)}
@@ -283,7 +282,7 @@ function App() {
         )}
 
         {showSnowTimeline && (
-          <section className="timeline-panel timeline-panel-snow">
+          <section className="timeline-panel timeline-panel-snow" onClick={() => snowSliderRef.current?.focus()}>
             <div className="timeline-header">
               <span className="timeline-label">Snow coverage timeline</span>
               <div className="date-display">
@@ -291,6 +290,7 @@ function App() {
               </div>
             </div>
             <input
+              ref={snowSliderRef}
               type="range"
               min="0"
               max={String(AVAILABLE_SNOW_DATES.length - 1)}
