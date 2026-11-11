@@ -27,3 +27,6 @@ snow_data_generator/output/rasters/
 snow_data_generator/output/visualizations/
 
 venv/
+
+# Session scratch (screenshots, ad-hoc scripts)
+.tmp/
