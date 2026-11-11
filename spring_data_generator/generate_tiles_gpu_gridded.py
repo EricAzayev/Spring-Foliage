@@ -10,6 +10,7 @@ import io
 import math
 import requests
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 import numpy as np
 from pathlib import Path
@@ -36,7 +37,10 @@ TILE_SIZE = 256
 #   SUPABASE_BUCKET=tiles  (optional, defaults to 'tiles')
 UPLOAD_TO_SUPABASE = True
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "tiles")
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+# Strip any path suffix (e.g. /rest/v1) — the .env may hold a data-API URL, but
+# storage calls need the bare project origin (mirrors migrate_to_supabase.py)
+_parsed_url = urlparse(os.environ.get("SUPABASE_URL", ""))
+SUPABASE_URL = f"{_parsed_url.scheme}://{_parsed_url.netloc}"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 def upload_tile_to_supabase(storage_path, png_bytes):
