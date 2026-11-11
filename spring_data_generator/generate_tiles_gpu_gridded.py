@@ -179,9 +179,12 @@ def render_tile_gpu_quantized(source_data_gpu, transform, src_width, src_height,
     coords = cp.stack([row_grid, col_grid])
     sampled = map_coordinates(source_data_gpu, coords, order=0, mode='constant', cval=0)
     
-    # Check data
+    # Check data. Empty tiles (all ocean/outside the raster) still need to be
+    # saved as transparent placeholders: MapLibre requests every tile
+    # overlapping the viewport, so a missing object 404s in the console and
+    # leaves a hole that stays unloaded when it scrolls back into view.
     if not cp.any((sampled >= 1) & (sampled <= 365)):
-        return None
+        return np.zeros((TILE_SIZE, TILE_SIZE, 4), dtype=np.uint8)
         
     rgba = classify_foliage_gpu(sampled, current_day)
     return cp.asnumpy(rgba)
